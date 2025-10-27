@@ -1,0 +1,75 @@
+# ===============================
+# Go Build Artifacts
+# ===============================
+bin/
+pgtransfer
+pgtransfer.exe
+*.exe
+*.out
+*.test
+
+# ===============================
+# Go Dependencies
+# ===============================
+vendor/
+go.sum.lock
+
+# ===============================
+# Logs and Runtime Files
+# ===============================
+*.log
+logs/
+.pgtransfer_logs/
+.pgtransfer_secret
+.pgtransfer_config.yaml
+
+# ===============================
+# Build & Release Artifacts
+# ===============================
+build/*.tar.gz
+build/*.zip
+dist/
+coverage.out
+*.prof
+*.cov
+*.testresult
+
+# ===============================
+# Docker & Compose
+# ===============================
+# Ignore data volume mount
+pgtransfer_data/
+**/pgtransfer_data/
+# Compose state files
+docker-compose.override.yml
+.docker/
+
+# ===============================
+# Local Environment & Secrets
+# ===============================
+.env
+.env.*
+.envrc
+config.yaml
+*.key
+*.pem
+
+# ===============================
+# Editor & OS Files
+# ===============================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.tmp
+
+# ===============================
+# Testing & Temporary Files
+# ===============================
+tests/tmp/
+tmp/
+*.bak
+*.old
+*.retry
