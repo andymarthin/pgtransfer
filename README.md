@@ -16,7 +16,7 @@ It supports importing and exporting tables in standard formats, handles secure c
 ## Installation
 
 ### Requirements
-- Go 1.21 or newer
+- Go 1.24.4 or newer
 - PostgreSQL 13 or newer
 - (Optional) Docker & Docker Compose
 

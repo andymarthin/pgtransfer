@@ -1,20 +1,20 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-
+	"github.com/andymarthin/pgtransfer/cmd/profile"
 	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "pgtransfer",
-	Short: "Secure PostgreSQL import/export CLI with SSH tunneling and parallelism",
+	Short: "Transfer PostgreSQL data between databases or CSV files",
 }
 
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+func Execute() error {
+	return rootCmd.Execute()
+}
+
+func init() {
+	rootCmd.AddCommand(profile.ProfileCmd)
+	rootCmd.AddCommand(testConnectionCmd)
 }
