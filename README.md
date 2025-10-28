@@ -10,11 +10,13 @@
 ## ✨ Features
 
 - **🔄 Data Transfer**: Import and export PostgreSQL tables to/from CSV format
+- **🗄️ Database Migration**: Complete database migration with schema, data, and selective table transfer
 - **⚡ Batch Processing**: High-performance batch operations with configurable batch sizes
 - **🔐 Secure Connections**: Support for SSL/TLS and SSH tunnel connections
 - **👤 Profile Management**: Reusable connection profiles with secure credential storage
 - **🖥️ Interactive Setup**: User-friendly interactive profile configuration
 - **📊 Progress Tracking**: Real-time progress indicators for large data operations
+- **🔄 Rollback Support**: Automatic backup creation and rollback capabilities for migrations
 - **📝 Comprehensive Logging**: Detailed JSON-formatted operation logs
 - **🔑 Multiple Authentication**: Support for password and SSH key authentication
 - **💾 Memory Efficient**: Optimized for large datasets with efficient memory usage
@@ -222,6 +224,223 @@ Import from SQL dump file (automatically detects format):
 
 ```bash
 pgtransfer import dump myprofile backup.sql
+```
+
+### Database Migration
+
+PGTransfer provides comprehensive database migration capabilities for transferring entire databases or specific components between PostgreSQL instances. You can use either different profiles or the same profile with database overrides.
+
+#### Migration Modes
+
+**Mode 1: Different Profiles**
+Use separate connection profiles for source and target:
+
+```bash
+pgtransfer migrate database source_profile target_profile
+```
+
+**Mode 2: Same Profile with Database Override**
+Use the same connection profile but specify different database names:
+
+```bash
+pgtransfer migrate database profile --source-database source_db --target-database target_db
+```
+
+#### Full Database Migration
+
+Migrate complete database (schema + data) with different profiles:
+
+```bash
+pgtransfer migrate database source_profile target_profile
+```
+
+Migrate complete database using same profile:
+
+```bash
+pgtransfer migrate database myprofile --source-database prod_db --target-database staging_db
+```
+
+#### Schema-Only Migration
+
+Transfer only the database structure with different profiles:
+
+```bash
+pgtransfer migrate database source_profile target_profile --schema-only
+```
+
+Transfer only the database structure using same profile:
+
+```bash
+pgtransfer migrate database myprofile --source-database prod_db --target-database dev_db --schema-only
+```
+
+#### Data-Only Migration
+
+Transfer only data (assumes target schema exists) with different profiles:
+
+```bash
+pgtransfer migrate database source_profile target_profile --data-only
+```
+
+Transfer only data using same profile:
+
+```bash
+pgtransfer migrate database myprofile --source-database source_db --target-database target_db --data-only
+```
+
+#### Selective Table Migration
+
+Migrate specific tables with different profiles:
+
+```bash
+pgtransfer migrate database source_profile target_profile --tables users,orders,products
+```
+
+Migrate specific tables using same profile:
+
+```bash
+pgtransfer migrate database myprofile --source-database db1 --target-database db2 --tables users,orders,products
+```
+
+#### Migration with Validation
+
+Pre-validate migration before execution with different profiles:
+
+```bash
+pgtransfer migrate database source_profile target_profile --validate --verbose
+```
+
+Pre-validate migration using same profile:
+
+```bash
+pgtransfer migrate database myprofile --source-database source_db --target-database target_db --validate --verbose
+```
+
+#### Migration with Rollback Support
+
+Enable automatic backup for rollback capability with different profiles:
+
+```bash
+pgtransfer migrate database source_profile target_profile --enable-rollback
+```
+
+Enable automatic backup using same profile:
+
+```bash
+pgtransfer migrate database myprofile --source-database source_db --target-database target_db --enable-rollback
+```
+
+#### Advanced Migration Options
+
+With different profiles:
+
+```bash
+pgtransfer migrate database source_profile target_profile \
+  --tables users,orders \
+  --validate \
+  --enable-rollback \
+  --timeout 1800 \
+  --batch-size 1000 \
+  --verbose
+```
+
+With same profile and database override:
+
+```bash
+pgtransfer migrate database myprofile \
+  --source-database source_db \
+  --target-database target_db \
+  --tables users,orders \
+  --validate \
+  --enable-rollback \
+  --timeout 1800 \
+  --batch-size 1000 \
+  --verbose
+```
+
+#### Rollback Operations
+
+Rollback a migration using a backup file:
+
+```bash
+pgtransfer migrate rollback target_profile /path/to/backup.sql --verbose
+```
+
+#### Migration Features
+
+- **🔍 Pre-Migration Validation**: Connection testing and schema compatibility checks
+- **📊 Progress Tracking**: Real-time progress indicators with elapsed time
+- **🔄 Rollback Support**: Automatic backup creation for safe rollbacks
+- **⚙️ Flexible Options**: Schema-only, data-only, or selective table migration
+- **🛡️ Error Handling**: Comprehensive error reporting and graceful failure handling
+- **⏱️ Timeout Control**: Configurable timeouts for long-running migrations
+- **📝 Verbose Logging**: Detailed operation logs for troubleshooting
+
+#### Migration Examples
+
+**Production Database Refresh (Different Profiles):**
+```bash
+# Create backup and migrate with rollback support
+pgtransfer migrate database production staging --enable-rollback --verbose
+
+# If issues occur, rollback
+pgtransfer migrate rollback staging /path/to/backup_20241028_092222.sql
+```
+
+**Production Database Refresh (Same Profile):**
+```bash
+# Create backup and migrate with rollback support using same profile
+pgtransfer migrate database myprofile \
+  --source-database prod_db \
+  --target-database staging_db \
+  --enable-rollback --verbose
+
+# If issues occur, rollback
+pgtransfer migrate rollback staging /path/to/backup_20241028_092222.sql
+```
+
+**Development Environment Setup (Different Profiles):**
+```bash
+# Schema-only migration for development
+pgtransfer migrate database production dev --schema-only
+
+# Add sample data separately
+pgtransfer migrate database sample_data dev --data-only --tables users,products
+```
+
+**Development Environment Setup (Same Profile):**
+```bash
+# Schema-only migration for development using same profile
+pgtransfer migrate database myprofile \
+  --source-database production_db \
+  --target-database dev_db \
+  --schema-only
+
+# Add sample data separately
+pgtransfer migrate database myprofile \
+  --source-database sample_data_db \
+  --target-database dev_db \
+  --data-only --tables users,products
+```
+
+**Selective Data Migration (Different Profiles):**
+```bash
+# Migrate specific tables with validation
+pgtransfer migrate database prod_replica analytics \
+  --tables user_events,transactions,metrics \
+  --validate \
+  --timeout 3600
+```
+
+**Selective Data Migration (Same Profile):**
+```bash
+# Migrate specific tables with validation using same profile
+pgtransfer migrate database myprofile \
+  --source-database prod_replica_db \
+  --target-database analytics_db \
+  --tables user_events,transactions,metrics \
+  --validate \
+  --timeout 3600
 ```
 
 ## ⚡ Batch Processing & Performance

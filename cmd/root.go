@@ -3,6 +3,7 @@ package cmd
 import (
 	"github.com/andymarthin/pgtransfer/cmd/export"
 	importcmd "github.com/andymarthin/pgtransfer/cmd/import"
+	"github.com/andymarthin/pgtransfer/cmd/migrate"
 	"github.com/andymarthin/pgtransfer/cmd/profile"
 	"github.com/spf13/cobra"
 )
@@ -21,4 +22,5 @@ func init() {
 	rootCmd.AddCommand(testConnectionCmd)
 	rootCmd.AddCommand(export.ExportCmd)
 	rootCmd.AddCommand(importcmd.ImportCmd)
+	rootCmd.AddCommand(migrate.MigrateCmd)
 }
