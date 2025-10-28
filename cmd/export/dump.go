@@ -74,16 +74,13 @@ func runDumpExport(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("ℹ️  Creating database dump using profile '%s'...\n", profileName)
 
-	// Build database URL
-	dbURL := config.BuildDSN(profile)
-
 	// Check if any advanced options are used
 	hasAdvancedOptions := dumpFormat != "" || dumpCompress || dumpSchemaOnly || dumpDataOnly ||
 		len(dumpTables) > 0 || len(dumpExcludeTables) > 0 || dumpSchema != "" ||
 		dumpVerbose || dumpTimeout > 0
 
 	if hasAdvancedOptions {
-		// Use advanced dump function
+		// Use advanced dump function with connection support (SSH/direct)
 		options := &io.DumpOptions{
 			Format:        dumpFormat,
 			Compress:      dumpCompress,
@@ -95,29 +92,29 @@ func runDumpExport(cmd *cobra.Command, args []string) error {
 			Verbose:       dumpVerbose,
 			Timeout:       dumpTimeout,
 		}
-		return io.DumpDatabaseWithOptions(dbURL, outputFile, options)
+		return io.DumpDatabaseWithConnectionAndOptions(profile, outputFile, options)
 	} else {
-		// Use simple dump function for basic usage
-		return io.DumpDatabase(dbURL, outputFile)
+		// Use simple dump function with connection support (SSH/direct)
+		return io.DumpDatabaseWithConnection(profile, outputFile)
 	}
 }
 
 func init() {
 	dumpCmd.Flags().BoolVar(&dumpOverwrite, "overwrite", false, "Overwrite output file if it exists")
-	
+
 	// Format and compression options
 	dumpCmd.Flags().StringVar(&dumpFormat, "format", "", "Output format: plain, custom, directory, tar (default: plain)")
 	dumpCmd.Flags().BoolVar(&dumpCompress, "compress", false, "Enable compression (not available for plain format)")
-	
+
 	// Content filtering options
 	dumpCmd.Flags().BoolVar(&dumpSchemaOnly, "schema-only", false, "Export schema only (no data)")
 	dumpCmd.Flags().BoolVar(&dumpDataOnly, "data-only", false, "Export data only (no schema)")
-	
+
 	// Table and schema filtering
 	dumpCmd.Flags().StringSliceVar(&dumpTables, "table", []string{}, "Include specific table(s) (can be used multiple times)")
 	dumpCmd.Flags().StringSliceVar(&dumpExcludeTables, "exclude-table", []string{}, "Exclude specific table(s) (can be used multiple times)")
 	dumpCmd.Flags().StringVar(&dumpSchema, "schema", "", "Export specific schema only")
-	
+
 	// Advanced options
 	dumpCmd.Flags().BoolVar(&dumpVerbose, "verbose", false, "Enable verbose output")
 	dumpCmd.Flags().IntVar(&dumpTimeout, "timeout", 0, "Command timeout in seconds (0 = no timeout)")

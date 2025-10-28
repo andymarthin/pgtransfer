@@ -51,9 +51,8 @@ func runDumpImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("profile '%s' not found", profileName)
 	}
 
-	// Build database URL
-	dbURL := config.BuildDSN(profile)
+	fmt.Printf("ℹ️  Importing database dump using profile '%s'...\n", profileName)
 
-	// Perform the restore
-	return io.RestoreDatabaseSmart(dbURL, inputFile)
+	// Use connection-aware restore function that supports SSH tunnels
+	return io.RestoreDatabaseWithConnection(profile, inputFile)
 }
