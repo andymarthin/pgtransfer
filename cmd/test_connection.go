@@ -55,11 +55,10 @@ Examples:
 				utils.PrintError(cmd, "Profile '%s' not found", profileName)
 				return fmt.Errorf("profile '%s' not found", profileName)
 			}
-			utils.PrintInfo(cmd, "Testing connection for profile '%s'...", profileName)
-		} else {
+		} else if hasTestConnectionFlags(cmd) {
 			// Use direct connection parameters
 			if testUser == "" || testHost == "" || testDatabase == "" {
-				utils.PrintError(cmd, "When not using --profile, you must specify at least --user, --host, and --database")
+				utils.PrintError(cmd, "When using direct connection parameters, you must specify at least --user, --host, and --database")
 				return fmt.Errorf("missing required connection parameters")
 			}
 
@@ -83,7 +82,26 @@ Examples:
 					Timeout:    testSSHTimeout,
 				},
 			}
-			utils.PrintInfo(cmd, "Testing direct connection to %s@%s:%d/%s...", testUser, testHost, testPort, testDatabase)
+			// Create a masked password for display
+			passwordDisplay := ""
+			if testPassword != "" {
+				passwordDisplay = "***"
+			}
+			if passwordDisplay != "" {
+				utils.PrintInfo(cmd, "Testing direct connection to %s:%s@%s:%d/%s...", testUser, passwordDisplay, testHost, testPort, testDatabase)
+			} else {
+				utils.PrintInfo(cmd, "Testing direct connection to %s@%s:%d/%s...", testUser, testHost, testPort, testDatabase)
+			}
+		} else {
+			// No flags provided, use active profile
+			var err error
+			profile, err = config.GetActiveProfile()
+			if err != nil {
+				utils.PrintError(cmd, "No active profile found. %v", err)
+				utils.PrintInfo(cmd, "Use 'pgtransfer profile use <name>' to set an active profile, or provide connection parameters directly.")
+				return err
+			}
+
 		}
 
 		// Test the connection
@@ -118,4 +136,19 @@ func init() {
 	testConnectionCmd.Flags().StringVar(&testSSHPassword, "ssh-password", "", "SSH password (optional)")
 	testConnectionCmd.Flags().IntVar(&testSSHPort, "ssh-port", 22, "SSH port")
 	testConnectionCmd.Flags().IntVar(&testSSHTimeout, "ssh-timeout", 10, "SSH timeout in seconds")
+}
+
+// hasTestConnectionFlags checks if any connection-related flags have been provided
+func hasTestConnectionFlags(cmd *cobra.Command) bool {
+	connectionFlags := []string{
+		"user", "password", "host", "port", "database", "db", "sslmode",
+		"ssh-host", "ssh-user", "ssh-key", "ssh-passphrase", "ssh-password", "ssh-port", "ssh-timeout",
+	}
+	
+	for _, flag := range connectionFlags {
+		if cmd.Flags().Changed(flag) {
+			return true
+		}
+	}
+	return false
 }

@@ -1,268 +1,321 @@
 
-# pgtransfer
+# PGTransfer
 
-`pgtransfer` is a command-line tool written in Go for importing and exporting data from PostgreSQL databases.
-It supports direct connections or connections through SSH tunnels and allows reusable connection profiles for convenience.
+[![Go Version](https://img.shields.io/badge/Go-1.24.4+-blue.svg)](https://golang.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-blue.svg)](https://postgresql.org)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
----
+**PGTransfer** is a powerful, secure, and user-friendly command-line tool for PostgreSQL data operations. Built with Go, it provides seamless data import/export capabilities with advanced features like SSH tunneling, connection profiles, and interactive configuration.
 
-## Features
+## ✨ Features
 
-`pgtransfer` simplifies PostgreSQL data transfer operations.
-It supports importing and exporting tables in standard formats, handles secure connections over SSH, and manages connection profiles for multiple environments.
+- **🔄 Data Transfer**: Import and export PostgreSQL tables to/from CSV format
+- **🔐 Secure Connections**: Support for SSL/TLS and SSH tunnel connections
+- **👤 Profile Management**: Reusable connection profiles with secure credential storage
+- **🖥️ Interactive Setup**: User-friendly interactive profile configuration
+- **📊 Progress Tracking**: Real-time progress indicators for large data operations
+- **📝 Comprehensive Logging**: Detailed JSON-formatted operation logs
+- **🔑 Multiple Authentication**: Support for password and SSH key authentication
+- **⚡ High Performance**: Optimized for large datasets with efficient memory usage
 
----
+## 🚀 Quick Start
 
-## Installation
+### Prerequisites
 
-### Requirements
-- Go 1.24.4 or newer
-- PostgreSQL 13 or newer
-- (Optional) Docker & Docker Compose
+- **Go**: Version 1.24.4 or newer
+- **PostgreSQL**: Version 13 or newer
+- **SSH Client**: For SSH tunnel connections (optional)
 
-### Build
+### Installation
+
+#### From Source
+
 ```bash
 git clone https://github.com/andymarthin/pgtransfer.git
 cd pgtransfer
 go build -o pgtransfer
 sudo mv pgtransfer /usr/local/bin/
-
-
----
-
-## Configuration
-
-Connection profiles are stored in:
-
-```
-~/.pgtransfer_config.yaml
 ```
 
-Each profile can define connection parameters or a full database URL.
-SSH settings are optional.
+#### Verify Installation
 
-Example configuration:
+```bash
+pgtransfer --help
+```
+
+## 📋 Usage
+
+### Profile Management
+
+PGTransfer uses connection profiles to manage database credentials and settings securely.
+
+#### Create a New Profile (Interactive)
+
+```bash
+pgtransfer profile add myprofile
+```
+
+The interactive setup will guide you through:
+- Database connection details
+- SSL configuration
+- SSH tunnel settings (optional)
+- Authentication method selection
+
+#### Create a Profile (Command Line)
+
+```bash
+pgtransfer profile add production \
+  --user myuser \
+  --password mypassword \
+  --host db.example.com \
+  --port 5432 \
+  --database myapp \
+  --sslmode require
+```
+
+#### SSH Tunnel Configuration
+
+For secure connections through a bastion host:
+
+```bash
+pgtransfer profile add staging \
+  --user dbuser \
+  --host localhost \
+  --port 5432 \
+  --database staging_db \
+  --ssh-host bastion.example.com \
+  --ssh-user ubuntu \
+  --ssh-key ~/.ssh/id_rsa
+```
+
+#### List Profiles
+
+```bash
+pgtransfer profile list
+```
+
+#### Test Connection
+
+```bash
+pgtransfer test-connection myprofile
+```
+
+#### Update Existing Profile
+
+When updating an existing profile, PGTransfer will show current values as defaults:
+
+```bash
+pgtransfer profile add myprofile
+```
+
+```
+⚠️  Profile 'myprofile' already exists with the following configuration:
+  Database: myuser@db.example.com:5432/myapp
+  SSL Mode: require
+  SSH: Not configured
+
+Do you want to overwrite it? [y/N]: y
+
+🧩 Interactive Profile Setup
+Database user [myuser]: newuser
+Database password: 
+Database host [db.example.com]: 
+Database port [5432]: 
+Database name [myapp]: 
+SSL mode [require]: 
+Use SSH tunnel? (y/N) [n]: 
+```
+
+### Data Operations
+
+#### Export Data
+
+Export a table to CSV:
+
+```bash
+pgtransfer export --profile myprofile --table users --file users_export.csv
+```
+
+With custom query:
+
+```bash
+pgtransfer export --profile myprofile \
+  --query "SELECT id, name, email FROM users WHERE active = true" \
+  --file active_users.csv
+```
+
+#### Import Data
+
+Import CSV data to a table:
+
+```bash
+pgtransfer import --profile myprofile --table users --file users_import.csv
+```
+
+### Advanced Usage
+
+#### Override Profile Database
+
+```bash
+pgtransfer export --profile myprofile --database different_db --table users --file export.csv
+```
+
+#### Skip Connection Testing
+
+```bash
+pgtransfer profile add myprofile --skip-test
+```
+
+#### Force Profile Overwrite
+
+```bash
+pgtransfer profile add myprofile --force
+```
+
+## 🔧 Configuration
+
+### Configuration File
+
+Profiles are stored in `~/.pgtransfer/config.yaml`:
 
 ```yaml
 profiles:
   local:
+    name: local
     user: postgres
-    password: postgres
     host: localhost
     port: 5432
-    database: pgtransfer_test
-  staging:
-    db_url: postgres://staging_user:secret@staging.example.com:5432/appdb
-    ssh_host: bastion.example.com
-    ssh_user: ubuntu
-    ssh_key: ~/.ssh/id_rsa
+    database: myapp_dev
+    sslmode: disable
+    ssh:
+      enabled: false
+  
+  production:
+    name: production
+    user: app_user
+    host: localhost
+    port: 5432
+    database: myapp_prod
+    sslmode: require
+    ssh:
+      enabled: true
+      host: bastion.example.com
+      user: ubuntu
+      port: 22
+      key_path: /home/user/.ssh/id_rsa
+      timeout: 10
 ```
 
----
+### Logging
 
-## Profile Management
+Logs are automatically saved to `~/.pgtransfer/logs/` in JSON format:
 
-### Create or update a profile
-
-```bash
-pgtransfer profile:add local \
-  --user postgres --password postgres \
-  --host localhost --port 5432 --database pgtransfer_test
+```json
+{
+  "timestamp": "2024-01-15T10:30:45Z",
+  "level": "info",
+  "operation": "export",
+  "profile": "production",
+  "table": "users",
+  "file": "users_export.csv",
+  "status": "success",
+  "duration_ms": 1250,
+  "rows_processed": 10000
+}
 ```
 
-### Interactive setup
+## 🐳 Development & Testing
 
-```bash
-pgtransfer profile:add
-```
+### Local Development with Docker
 
-Example:
-
-```
-Profile name: local
-Host: localhost
-Port: 5432
-User: postgres
-Password: ******
-Database: pgtransfer_test
-🔍 Testing connection...
-✅ Connection test succeeded. Profile 'local' saved.
-```
-
-### Overwrite an existing profile
-
-```bash
-pgtransfer profile:add local --db postgres://... --force
-```
-
----
-
-## Export Data
-
-Export a PostgreSQL table to a CSV file.
-
-```bash
-pgtransfer export --profile local --table users --file users_export.csv
-```
-
-Output:
-
-```
-Connecting to database: localhost:5432/pgtransfer_test (direct)
-Progress: ███████████████████ 100%
-✅ Export complete. File saved at ./users_export.csv
-```
-
-To override the database defined in a profile:
-
-```bash
-pgtransfer export --profile local --database test_db --table users --file users_export.csv
-```
-
----
-
-## Import Data
-
-Import a CSV file into a PostgreSQL table.
-
-```bash
-pgtransfer import --profile local --table users --file users_import.csv
-```
-
-Output:
-
-```
-Connecting to database: localhost:5432/pgtransfer_test (direct)
-Progress: ███████████████████ 100%
-✅ Import completed successfully.
-```
-
----
-
-## SSH Tunnel Example
-
-If SSH settings are configured in a profile, the tool automatically uses an SSH tunnel.
-
-```bash
-pgtransfer export --profile staging --table users --file users_staging.csv
-```
-
-Output:
-
-```
-Connecting via SSH tunnel (bastion.example.com → localhost:5432)
-Progress: ███████████████████ 100%
-✅ Export complete.
-```
-
----
-
-## Local Testing with Docker
-
-Example Docker Compose setup:
+Create a `docker-compose.yml` for testing:
 
 ```yaml
 version: "3.8"
 services:
-  db:
+  postgres:
     image: postgres:15
-    container_name: pgtransfer_db
+    container_name: pgtransfer_test
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: pgtransfer_test
+      POSTGRES_DB: testdb
     ports:
       - "5432:5432"
+    volumes:
+      - ./test_data:/docker-entrypoint-initdb.d
 ```
 
-Start the container:
+Start the test environment:
 
 ```bash
-docker compose up -d
+docker-compose up -d
 ```
 
----
+### Sample Test Data
 
-## Example SQL for Testing
-
-`init_pgtransfer_test.sql`
+Create `test_data/init.sql`:
 
 ```sql
-CREATE DATABASE pgtransfer_test;
-\c pgtransfer_test;
-
 CREATE TABLE users (
-  id SERIAL PRIMARY KEY,
-  username VARCHAR(50),
-  email VARCHAR(100),
-  age INT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    age INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO users (username, email, age)
-VALUES
-  ('alice', 'alice@example.com', 30),
-  ('bob', 'bob@example.com', 25),
-  ('charlie', 'charlie@example.com', 35);
+INSERT INTO users (username, email, age) VALUES
+    ('alice', 'alice@example.com', 30),
+    ('bob', 'bob@example.com', 25),
+    ('charlie', 'charlie@example.com', 35),
+    ('diana', 'diana@example.com', 28);
 ```
 
-Run inside the container:
+### Running Tests
 
 ```bash
-docker exec -i pgtransfer_db psql -U postgres -f /tmp/init_pgtransfer_test.sql
+go test ./...
 ```
+
+## 🔒 Security Features
+
+- **Secure Password Input**: Passwords are never echoed to the terminal
+- **SSH Key Support**: Supports both password and key-based SSH authentication
+- **SSL/TLS Encryption**: Configurable SSL modes for database connections
+- **Credential Storage**: Secure local storage of connection profiles
+- **SSH Tunnel Encryption**: All data transfers through SSH tunnels are encrypted
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+
+### Development Setup
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes and add tests
+4. Commit your changes: `git commit -m 'Add amazing feature'`
+5. Push to the branch: `git push origin feature/amazing-feature`
+6. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🆘 Support
+
+- **Issues**: [GitHub Issues](https://github.com/andymarthin/pgtransfer/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/andymarthin/pgtransfer/discussions)
+- **Documentation**: [Wiki](https://github.com/andymarthin/pgtransfer/wiki)
+
+## 🏆 Acknowledgments
+
+- Built with [Go](https://golang.org/)
+- PostgreSQL driver: [pq](https://github.com/lib/pq)
+- SSH client: [golang.org/x/crypto/ssh](https://pkg.go.dev/golang.org/x/crypto/ssh)
+- CLI framework: [Cobra](https://github.com/spf13/cobra)
 
 ---
 
-## Example CSV for Import
-
-`users_import.csv`
-
-```csv
-username,email,age
-david,david@example.com,28
-emma,emma@example.com,24
-frank,frank@example.com,31
-```
-
----
-
-## Typical Workflow
-
-```bash
-# Start local PostgreSQL
-docker compose up -d
-
-# Add a profile
-pgtransfer profile:add local --user postgres --password postgres --host localhost --database pgtransfer_test
-
-# Import data
-pgtransfer import --profile local --table users --file users_import.csv
-
-# Export data
-pgtransfer export --profile local --table users --file exported_users.csv
-```
-
----
-
-## Logs
-
-Logs are written as JSON files in:
-
-```
-~/.pgtransfer_logs/YYYY-MM-DD.log
-```
-
-Example:
-
-```json
-{
-  "timestamp": "2025-10-27T09:21:12Z",
-  "operation": "export",
-  "profile": "local",
-  "table": "users",
-  "file": "users_export.csv",
-  "status": "success",
-  "duration_ms": 874
-}
-```
+**Made with ❤️ by the PGTransfer team**

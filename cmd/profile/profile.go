@@ -25,5 +25,8 @@ Examples:
   
   # Show active profile
   pgtransfer profile active
+  
+  # Delete a profile
+  pgtransfer profile delete remote
 `,
 }

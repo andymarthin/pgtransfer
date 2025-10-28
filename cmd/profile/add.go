@@ -6,11 +6,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/db"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -18,7 +20,7 @@ var (
 	flagSSHHost, flagSSHUser, flagSSHKey, flagSSHPassword, flagSSHPassphrase string
 	flagSSLMode                                                        string
 	flagPort, flagSSHPort, flagSSHTimeout                              int
-	flagForce, flagInteractive                                         bool
+	flagForce, flagInteractive, flagSkipTest, flagNonInteractive       bool
 )
 
 var addCmd = &cobra.Command{
@@ -37,7 +39,23 @@ var addCmd = &cobra.Command{
 
 		// Ask confirmation if profile exists and not using --force
 		if exists && !flagForce {
-			utils.PrintWarning(cmd, "Profile '%s' already exists.", name)
+			// Load and display current profile values
+			cfg, err := config.LoadConfig()
+			if err == nil {
+				if currentProfile, ok := cfg.Profiles[name]; ok {
+					utils.PrintWarning(cmd, "Profile '%s' already exists with the following configuration:", name)
+					fmt.Printf("  Database: %s@%s:%d/%s\n", currentProfile.User, currentProfile.Host, currentProfile.Port, currentProfile.Database)
+					fmt.Printf("  SSL Mode: %s\n", currentProfile.SSLMode)
+					if currentProfile.SSH.Enabled {
+						fmt.Printf("  SSH: %s@%s:%d\n", currentProfile.SSH.User, currentProfile.SSH.Host, currentProfile.SSH.Port)
+						if currentProfile.SSH.KeyPath != "" {
+							fmt.Printf("  SSH Key: %s\n", currentProfile.SSH.KeyPath)
+						}
+					}
+					fmt.Println()
+				}
+			}
+			
 			fmt.Print("Do you want to overwrite it? [y/N]: ")
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
@@ -48,9 +66,28 @@ var addCmd = &cobra.Command{
 		}
 
 		var p config.Profile
+		var existingProfile *config.Profile
 
-		if flagInteractive {
-			p = promptProfileInput(cmd, name)
+		// Load existing profile if it exists for use as defaults in interactive mode
+		if exists {
+			cfg, err := config.LoadConfig()
+			if err == nil {
+				if existing, ok := cfg.Profiles[name]; ok {
+					existingProfile = &existing
+				}
+			}
+		}
+
+		// Determine if we should use interactive mode
+		// Interactive mode is default unless:
+		// 1. --non-interactive flag is used, or
+		// 2. --interactive=false is explicitly set, or
+		// 3. Any connection flags are provided (indicating non-interactive intent)
+		useInteractive := !flagNonInteractive && 
+			(flagInteractive || (!cmd.Flags().Changed("interactive") && !hasConnectionFlags(cmd)))
+
+		if useInteractive {
+			p = promptProfileInput(cmd, name, existingProfile)
 		} else {
 			p = config.Profile{
 				Name:     name,
@@ -74,8 +111,16 @@ var addCmd = &cobra.Command{
 			}
 		}
 
-		utils.PrintInfo(cmd, "Validating connection for profile '%s'...", name)
-		if err := config.AddOrUpdateProfile(p, db.TestConnection); err != nil {
+		var testFunc func(config.Profile) error
+		if !flagSkipTest {
+			utils.PrintInfo(cmd, "Validating connection for profile '%s'...", name)
+			testFunc = db.TestConnection
+		} else {
+			utils.PrintInfo(cmd, "Skipping connection test for profile '%s'...", name)
+			testFunc = nil
+		}
+
+		if err := config.AddOrUpdateProfile(p, testFunc); err != nil {
 			utils.PrintError(cmd, "Failed to save profile: %v", err)
 			return err
 		}
@@ -107,11 +152,24 @@ func init() {
 	addCmd.Flags().IntVar(&flagSSHTimeout, "ssh-timeout", 10, "SSH timeout in seconds")
 
 	addCmd.Flags().BoolVar(&flagForce, "force", false, "Overwrite if profile exists without prompt")
-	addCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Run in interactive mode")
+	addCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Force interactive mode (default unless flags provided)")
+	addCmd.Flags().BoolVar(&flagNonInteractive, "non-interactive", false, "Force non-interactive mode")
+	addCmd.Flags().BoolVar(&flagSkipTest, "skip-test", false, "Skip connection testing when adding profile")
+}
+
+// securePrompt prompts for sensitive information without echoing to terminal
+func securePrompt(label string) string {
+	fmt.Printf("%s: ", label)
+	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+	fmt.Println() // Print newline after password input
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(bytePassword))
 }
 
 // interactive prompt helper
-func promptProfileInput(cmd *cobra.Command, name string) config.Profile {
+func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config.Profile) config.Profile {
 	reader := bufio.NewReader(os.Stdin)
 	utils.PrintTitle(cmd, "🧩 Interactive Profile Setup")
 
@@ -129,34 +187,77 @@ func promptProfileInput(cmd *cobra.Command, name string) config.Profile {
 		return text
 	}
 
-	user := prompt("Database user", "postgres")
-	fmt.Print("Database password: ")
-	password, _ := reader.ReadString('\n')
-	password = strings.TrimSpace(password)
-	host := prompt("Database host", "localhost")
-	portStr := prompt("Database port", "5432")
-	port, _ := strconv.Atoi(portStr)
-	database := prompt("Database name", "")
-	sslmode := prompt("SSL mode", "disable")
+	// Set defaults from existing profile if available
+	defaultUser := "postgres"
+	defaultHost := "localhost"
+	defaultPort := "5432"
+	defaultDatabase := ""
+	defaultSSLMode := "disable"
+	
+	if existingProfile != nil {
+		defaultUser = existingProfile.User
+		defaultHost = existingProfile.Host
+		defaultPort = strconv.Itoa(existingProfile.Port)
+		defaultDatabase = existingProfile.Database
+		defaultSSLMode = existingProfile.SSLMode
+	}
 
-	useSSH := strings.ToLower(prompt("Use SSH tunnel? (y/N)", "n")) == "y"
+	user := prompt("Database user", defaultUser)
+	password := securePrompt("Database password")
+	host := prompt("Database host", defaultHost)
+	portStr := prompt("Database port", defaultPort)
+	port, _ := strconv.Atoi(portStr)
+	database := prompt("Database name", defaultDatabase)
+	sslmode := prompt("SSL mode", defaultSSLMode)
+
+	// Set SSH defaults from existing profile if available
+	defaultUseSSH := "n"
+	defaultSSHHost := ""
+	defaultSSHUser := ""
+	defaultSSHPort := "22"
+	defaultSSHTimeout := "10"
+	defaultAuthMethod := "k"
+	defaultKeyPath := ""
+	
+	if existingProfile != nil && existingProfile.SSH.Enabled {
+		defaultUseSSH = "y"
+		defaultSSHHost = existingProfile.SSH.Host
+		defaultSSHUser = existingProfile.SSH.User
+		defaultSSHPort = strconv.Itoa(existingProfile.SSH.Port)
+		defaultSSHTimeout = strconv.Itoa(existingProfile.SSH.Timeout)
+		if existingProfile.SSH.KeyPath != "" {
+			defaultAuthMethod = "k"
+			defaultKeyPath = existingProfile.SSH.KeyPath
+		} else {
+			defaultAuthMethod = "p"
+		}
+	}
+
+	useSSH := strings.ToLower(prompt("Use SSH tunnel? (y/N)", defaultUseSSH)) == "y"
 	var sshCfg config.SSHConfig
 	if useSSH {
 		sshCfg.Enabled = true
-		sshCfg.Host = prompt("SSH host", "")
-		sshCfg.User = prompt("SSH user", "")
-		portStr := prompt("SSH port", "22")
+		sshCfg.Host = prompt("SSH host", defaultSSHHost)
+		sshCfg.User = prompt("SSH user", defaultSSHUser)
+		portStr := prompt("SSH port", defaultSSHPort)
 		sshCfg.Port, _ = strconv.Atoi(portStr)
 		
 		// Ask user to choose authentication method
-		authMethod := strings.ToLower(prompt("SSH authentication method - use (k)ey or (p)assword? [k/p]", "k"))
+		authMethod := strings.ToLower(prompt("SSH authentication method - use (k)ey or (p)assword? [k/p]", defaultAuthMethod))
 		if authMethod == "p" || authMethod == "password" {
-			sshCfg.Password = prompt("SSH password", "")
+			sshCfg.Password = securePrompt("SSH password")
 		} else {
-			sshCfg.KeyPath = prompt("SSH key path", "")
+			sshCfg.KeyPath = prompt("SSH key path", defaultKeyPath)
+			// Ask for passphrase if key path is provided
+			if sshCfg.KeyPath != "" {
+				needsPassphrase := strings.ToLower(prompt("Does the SSH key require a passphrase? (y/N)", "n"))
+				if needsPassphrase == "y" || needsPassphrase == "yes" {
+					sshCfg.Passphrase = securePrompt("SSH key passphrase")
+				}
+			}
 		}
 		
-		timeoutStr := prompt("SSH timeout (seconds)", "10")
+		timeoutStr := prompt("SSH timeout (seconds)", defaultSSHTimeout)
 		sshCfg.Timeout, _ = strconv.Atoi(timeoutStr)
 	}
 
@@ -167,7 +268,23 @@ func promptProfileInput(cmd *cobra.Command, name string) config.Profile {
 		Host:     host,
 		Port:     port,
 		Database: database,
+		DBURL:    "", // Interactive mode doesn't use DBURL
 		SSLMode:  sslmode,
 		SSH:      sshCfg,
 	}
+}
+
+// hasConnectionFlags checks if any connection-related flags have been provided
+func hasConnectionFlags(cmd *cobra.Command) bool {
+	connectionFlags := []string{
+		"user", "password", "host", "port", "database", "db", "sslmode",
+		"ssh-host", "ssh-user", "ssh-key", "ssh-passphrase", "ssh-password", "ssh-port", "ssh-timeout",
+	}
+	
+	for _, flag := range connectionFlags {
+		if cmd.Flags().Changed(flag) {
+			return true
+		}
+	}
+	return false
 }
