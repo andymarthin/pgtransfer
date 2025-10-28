@@ -1,0 +1,11 @@
+employee_id,first_name,last_name,email,phone,department,position,salary,hire_date,birth_date,address,is_active,manager_id
+EMP011,Alice,Cooper,alice.cooper@company.com,+1-555-1011,Marketing,Marketing Manager,78000.00,2023-10-01,1984-06-15,1100 Marketing Mile,true,1
+EMP012,Brian,Wilson,brian.wilson@company.com,+1-555-1012,Finance,Financial Analyst,68000.00,2023-11-15,1989-03-28,1200 Finance Street,true,1
+EMP013,Catherine,Jones,catherine.jones@company.com,+1-555-1013,Engineering,DevOps Engineer,92000.00,2023-12-01,1987-09-12,1300 DevOps Drive,true,3
+EMP014,Daniel,Brown,daniel.brown@company.com,+1-555-1014,Sales,Account Manager,72000.00,2024-01-15,1990-11-05,1400 Account Avenue,true,2
+EMP015,Elizabeth,Davis,elizabeth.davis@company.com,+1-555-1015,Support,Customer Success Manager,65000.00,2024-02-01,1988-07-20,1500 Success Street,true,7
+EMP016,Frank,Miller,frank.miller@company.com,+1-555-1016,Engineering,Frontend Developer,82000.00,2024-02-15,1991-01-18,1600 Frontend Lane,true,3
+EMP017,Grace,Wilson,grace.wilson@company.com,+1-555-1017,Analytics,Business Analyst,71000.00,2024-03-01,1986-12-08,1700 Analytics Avenue,true,4
+EMP018,Henry,Taylor,henry.taylor@company.com,+1-555-1018,Operations,Process Coordinator,58000.00,2024-03-15,1992-04-25,1800 Process Place,true,9
+EMP019,Isabella,Garcia,isabella.garcia@company.com,+1-555-1019,HR,Recruiter,62000.00,2024-04-01,1989-08-14,1900 Recruiter Road,true,8
+EMP020,Jack,Anderson,jack.anderson@company.com,+1-555-1020,Engineering,Backend Developer,88000.00,2024-04-15,1985-10-30,2000 Backend Boulevard,true,3

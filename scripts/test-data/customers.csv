@@ -1,0 +1,13 @@
+customer_code,company_name,contact_name,contact_email,phone,address,city,country,postal_code,credit_limit
+CUST009,Advanced Analytics Co.,Thomas Anderson,thomas@advancedanalytics.com,+1-555-0109,555 Analytics Avenue,Denver,USA,80202,55000.00
+CUST010,CloudFirst Solutions,Jennifer Martinez,jennifer@cloudfirst.com,+1-555-0110,777 Cloud Street,Portland,USA,97201,42000.00
+CUST011,DataDriven Enterprises,Michael Chang,michael@datadriven.com,+1-555-0111,888 Data Boulevard,Phoenix,USA,85001,38000.00
+CUST012,SecureNet Systems,Amanda Foster,amanda@securenet.com,+1-555-0112,999 Security Lane,Miami,USA,33101,65000.00
+CUST013,InnovateTech Ltd.,Christopher Lee,chris@innovatetech.com,+44-20-7946-0959,25 Innovation Road,Manchester,UK,M1 1AA,28000.00
+CUST014,ScaleSoft Corporation,Rachel Green,rachel@scalesoft.com,+1-555-0114,111 Scale Drive,Atlanta,USA,30301,48000.00
+CUST015,AgileWorks Inc.,Daniel Kim,daniel@agileworks.com,+1-555-0115,222 Agile Way,Nashville,USA,37201,33000.00
+CUST016,TechFlow Solutions,Lisa Wang,lisa@techflow.com,+1-555-0116,333 Flow Street,Salt Lake City,USA,84101,41000.00
+CUST017,DigitalEdge Partners,Mark Thompson,mark@digitaledge.com,+1-555-0117,444 Edge Plaza,Orlando,USA,32801,52000.00
+CUST018,CloudBridge Systems,Sarah Johnson,sarah@cloudbridge.com,+1-555-0118,555 Bridge Avenue,Kansas City,USA,64101,36000.00
+CUST019,NextWave Technologies,David Rodriguez,david@nextwave.com,+1-555-0119,666 Wave Boulevard,San Diego,USA,92101,59000.00
+CUST020,SmartData Solutions,Emily Chen,emily@smartdata.com,+1-555-0120,777 Smart Circle,Minneapolis,USA,55401,44000.00

@@ -1,0 +1,13 @@
+id,name,description,price,quantity,date_created,is_active,tags,metadata
+1,"Product with ""quotes""","Description with, commas and ""quotes""",99.99,10,2024-01-15,true,"tag1,tag2,tag3","{""key"": ""value""}"
+2,Product with newlines,"Line 1
+Line 2
+Line 3",149.50,25,2024-01-16,false,"special,multi-line","{""complex"": true}"
+3,Product with special chars,"Special chars: àáâãäåæçèéêë",75.25,5,2024-01-17,true,"unicode,special","{""unicode"": ""test""}"
+4,Empty fields test,,0.00,,2024-01-18,true,,"{}"
+5,Null-like values,NULL,0,NULL,2024-01-19,false,NULL,NULL
+6,Very long product name that exceeds normal expectations and contains many words to test field length limits,Very long description that goes on and on and contains lots of text to test how the import handles large text fields and whether it truncates or handles them properly,999999.99,999999,2024-01-20,true,"long,test,field,limits,handling","{ ""very"": ""long"", ""json"": ""object"", ""with"": ""many"", ""keys"": ""and"", ""values"": ""to"", ""test"": ""limits"" }"
+7,Product with semicolons;and;separators,"Description; with; semicolons; and, commas",45.75,15,2024-01-21,true,"semicolon;test","{ ""separator"": ""test"" }"
+8,Product with tabs	and spaces,"Description	with	tabs	and   multiple   spaces",33.33,8,2024-01-22,true,"tabs	spaces","{""whitespace"": ""test""}"
+9,Product with numbers 12345,"Price: $67.89, Quantity: 100 units",67.89,100,2024-01-23,true,"numbers,123,test","{""numeric"": 12345}"
+10,Product with boolean-like values,"true, false, yes, no, 1, 0",1.00,1,2024-01-24,true,"boolean,true,false","{""bool"": true}"

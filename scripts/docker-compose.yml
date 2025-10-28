@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: pgtransfer-test-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: testdb
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./sample-data.sql:/docker-entrypoint-initdb.d/02-sample-data.sql:ro
+    networks:
+      - pgtransfer-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Optional: pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgtransfer-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@pgtransfer.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - pgtransfer-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Optional: SSH server for testing SSH tunnel functionality
+  ssh-server:
+    image: linuxserver/openssh-server:latest
+    container_name: pgtransfer-ssh-server
+    restart: unless-stopped
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: UTC
+      PUBLIC_KEY_FILE: /config/authorized_keys
+      SUDO_ACCESS: false
+      PASSWORD_ACCESS: true
+      USER_PASSWORD: sshpass
+      USER_NAME: sshuser
+    ports:
+      - "2222:2222"
+    volumes:
+      - ssh_config:/config
+      - ./ssh/authorized_keys:/config/authorized_keys:ro
+    networks:
+      - pgtransfer-network
+
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  ssh_config:
+    driver: local
+
+networks:
+  pgtransfer-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

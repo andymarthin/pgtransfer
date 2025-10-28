@@ -1,0 +1,10 @@
+# SSH authorized keys for testing SSH tunnel functionality
+# Add your public key here for testing SSH key authentication
+# Example format:
+# ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... user@hostname
+
+# For testing purposes, you can generate a test key pair with:
+# ssh-keygen -t rsa -b 2048 -f ~/.ssh/pgtransfer_test_key -N ""
+# Then copy the content of ~/.ssh/pgtransfer_test_key.pub here
+
+# Note: This is for testing only. In production, use proper key management.

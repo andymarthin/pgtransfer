@@ -1,0 +1,16 @@
+username,email,first_name,last_name,date_of_birth,is_active
+alex_johnson,alex.johnson@example.com,Alex,Johnson,1986-04-12,true
+betty_white,betty.white@example.com,Betty,White,1989-08-25,true
+carlos_martinez,carlos.martinez@example.com,Carlos,Martinez,1991-12-03,true
+deborah_clark,deborah.clark@example.com,Deborah,Clark,1987-06-18,false
+edward_lewis,edward.lewis@example.com,Edward,Lewis,1993-02-14,true
+fiona_walker,fiona.walker@example.com,Fiona,Walker,1990-10-07,true
+george_hall,george.hall@example.com,George,Hall,1988-03-22,true
+helen_young,helen.young@example.com,Helen,Young,1992-09-15,true
+ivan_king,ivan.king@example.com,Ivan,King,1985-11-28,true
+julia_wright,julia.wright@example.com,Julia,Wright,1994-01-09,true
+kevin_lopez,kevin.lopez@example.com,Kevin,Lopez,1987-07-31,false
+laura_hill,laura.hill@example.com,Laura,Hill,1991-05-16,true
+marcus_green,marcus.green@example.com,Marcus,Green,1989-12-20,true
+nancy_adams,nancy.adams@example.com,Nancy,Adams,1986-08-04,true
+oscar_baker,oscar.baker@example.com,Oscar,Baker,1993-04-27,true

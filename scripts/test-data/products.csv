@@ -1,0 +1,16 @@
+product_code,product_name,description,category,unit_price,cost_price,stock_quantity,reorder_level,is_active
+SOFT-004,Mobile App Development Kit,Complete mobile application development toolkit,Software,5500.00,2750.00,20,5,true
+SOFT-005,Cloud Integration Platform,Enterprise cloud integration and API management platform,Software,12000.00,6000.00,15,3,true
+SOFT-006,Security Suite,Comprehensive cybersecurity and threat protection suite,Software,8900.00,4450.00,30,8,true
+LIC-002,Multi-Year License,Three-year software license with extended support,License,2000.00,800.00,100,25,true
+LIC-003,Developer License,Individual developer license for software tools,License,450.00,180.00,500,100,true
+TRAIN-002,Advanced Training,Advanced user training and certification program,Service,5000.00,2000.00,10,2,true
+TRAIN-003,Online Training,Self-paced online training modules,Service,1200.00,480.00,unlimited,0,true
+SUP-002,Enterprise Support,Enterprise-level 24/7 support with dedicated account manager,Service,1500.00,600.00,50,10,true
+SUP-003,Community Support,Community-based support forum access,Service,50.00,20.00,1000,200,true
+HARD-001,Server Hardware,High-performance server hardware for enterprise deployments,Hardware,15000.00,9000.00,5,1,true
+HARD-002,Network Equipment,Enterprise networking equipment and switches,Hardware,3500.00,2100.00,12,3,true
+HARD-003,Storage Solution,High-capacity enterprise storage solution,Hardware,8000.00,4800.00,8,2,true
+CONS-002,Architecture Consulting,Enterprise architecture and design consulting,Service,200.00,100.00,500,100,true
+CONS-003,Migration Services,Data migration and system transition services,Service,175.00,87.50,300,50,true
+MAINT-001,Annual Maintenance,Annual hardware maintenance and support contract,Service,2500.00,1000.00,25,5,true

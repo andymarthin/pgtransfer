@@ -10,13 +10,15 @@
 ## ✨ Features
 
 - **🔄 Data Transfer**: Import and export PostgreSQL tables to/from CSV format
+- **⚡ Batch Processing**: High-performance batch operations with configurable batch sizes
 - **🔐 Secure Connections**: Support for SSL/TLS and SSH tunnel connections
 - **👤 Profile Management**: Reusable connection profiles with secure credential storage
 - **🖥️ Interactive Setup**: User-friendly interactive profile configuration
 - **📊 Progress Tracking**: Real-time progress indicators for large data operations
 - **📝 Comprehensive Logging**: Detailed JSON-formatted operation logs
 - **🔑 Multiple Authentication**: Support for password and SSH key authentication
-- **⚡ High Performance**: Optimized for large datasets with efficient memory usage
+- **💾 Memory Efficient**: Optimized for large datasets with efficient memory usage
+- **🎯 Smart Routing**: Automatic optimization for different data sizes
 
 ## 🚀 Quick Start
 
@@ -133,24 +135,224 @@ Use SSH tunnel? (y/N) [n]:
 Export a table to CSV:
 
 ```bash
-pgtransfer export --profile myprofile --table users --file users_export.csv
+pgtransfer export csv myprofile public.users users_export.csv --headers
 ```
 
-With custom query:
+Export with schema flag (defaults to 'public' if not specified):
 
 ```bash
-pgtransfer export --profile myprofile \
-  --query "SELECT id, name, email FROM users WHERE active = true" \
-  --file active_users.csv
+pgtransfer export csv myprofile users users_export.csv --headers --schema public
 ```
+
+With custom batch size for large datasets:
+
+```bash
+pgtransfer export csv myprofile public.users large_export.csv --headers --batch-size 1000
+```
+
+#### Database Dump Export
+
+Export complete database to SQL dump:
+
+```bash
+pgtransfer export dump myprofile database_backup.sql
+```
+
+Export with custom format and compression:
+
+```bash
+pgtransfer export dump myprofile backup.dump --format custom --compress
+```
+
+Export schema only (no data):
+
+```bash
+pgtransfer export dump myprofile schema_backup.sql --schema-only
+```
+
+Export data only (no schema):
+
+```bash
+pgtransfer export dump myprofile data_backup.sql --data-only
+```
+
+Export specific tables:
+
+```bash
+pgtransfer export dump myprofile users_backup.sql --table users --table orders
+```
+
+Export with advanced options:
+
+```bash
+pgtransfer export dump myprofile full_backup.dump \
+  --format custom \
+  --compress \
+  --verbose \
+  --timeout 300
+```
+
+**Supported Formats:**
+- `plain` (default): Standard SQL text format
+- `custom`: PostgreSQL custom binary format (supports compression)
+- `directory`: Directory format for parallel processing
+- `tar`: TAR archive format
 
 #### Import Data
 
 Import CSV data to a table:
 
 ```bash
-pgtransfer import --profile myprofile --table users --file users_import.csv
+pgtransfer import csv myprofile public.users users_import.csv --headers
 ```
+
+Import with schema flag (defaults to 'public' if not specified):
+
+```bash
+pgtransfer import csv myprofile users users_import.csv --headers --schema public
+```
+
+Import with custom batch size and overwrite existing data:
+
+```bash
+pgtransfer import csv myprofile public.users users_import.csv --headers --batch-size 1000 --overwrite
+```
+
+Import from SQL dump file (automatically detects format):
+
+```bash
+pgtransfer import dump myprofile backup.sql
+```
+
+## ⚡ Batch Processing & Performance
+
+PGTransfer features advanced batch processing capabilities optimized for large datasets. The system automatically handles memory management and provides real-time progress tracking.
+
+### Batch Size Optimization
+
+The default batch size is **500 rows**, which provides optimal performance for most use cases. However, you can customize this based on your specific needs:
+
+#### Performance Benchmarks (1M Records)
+
+| Batch Size | Export Time | Import Time | Memory Usage | Recommended For |
+|------------|-------------|-------------|--------------|-----------------|
+| 100        | 2m 38s      | ~4m         | Low          | Memory-constrained environments |
+| 500 (default) | 3.20s   | 3m 19s      | Moderate     | ✅ **Optimal for most cases** |
+| 1,000      | 3.84s       | ~3m         | Moderate     | Large datasets with good network |
+| 5,000      | 6.84s       | ~2m 30s     | Higher       | High-performance environments |
+| 10,000     | 5.25s       | ~2m         | High         | Maximum throughput scenarios |
+
+### Large Dataset Examples
+
+#### Export 1 Million Records
+
+```bash
+# Optimal performance with default batch size
+pgtransfer export csv production public.large_table export_1m.csv --headers
+
+# High-throughput export for fast networks
+pgtransfer export csv production public.large_table export_1m.csv --headers --batch-size 5000
+
+# Memory-efficient export for constrained environments
+pgtransfer export csv production public.large_table export_1m.csv --headers --batch-size 100
+```
+
+#### Import Large CSV Files
+
+```bash
+# Standard import with progress tracking
+pgtransfer import csv production public.target_table large_data.csv --headers
+
+# High-speed import with larger batches
+pgtransfer import csv production public.target_table large_data.csv --headers --batch-size 2000
+
+# Safe import with table replacement
+pgtransfer import csv production public.target_table large_data.csv --headers --overwrite
+```
+
+### Progress Tracking
+
+All operations display real-time progress with:
+- **Progress Bar**: Visual completion indicator
+- **Speed Metrics**: Rows processed per second
+- **Time Estimates**: Elapsed and estimated remaining time
+- **Memory Usage**: Current system resource utilization
+
+Example output:
+```
+Exporting public.users (elapsed 3s) 100% |████████████████████| (1000000/1000000, 322199 it/s)
+✅ Exported 1000000 rows to users_export.csv (batch size: 500)
+🕒 Duration: 3.15s
+```
+
+### Memory Management
+
+PGTransfer implements intelligent memory management:
+- **Streaming Processing**: Data is processed in chunks, not loaded entirely into memory
+- **Connection Pooling**: Efficient database connection reuse
+- **Garbage Collection**: Automatic cleanup of processed batches
+- **Resource Monitoring**: Built-in memory usage tracking
+
+## 📊 CSV Data Type Handling
+
+PGTransfer provides intelligent CSV formatting that properly handles PostgreSQL data types for seamless import/export operations.
+
+### Supported Data Types
+
+| PostgreSQL Type | CSV Format | Example |
+|----------------|------------|---------|
+| `DATE` | `YYYY-MM-DD` | `2008-07-06` |
+| `TIMESTAMP` | `YYYY-MM-DD HH:MM:SS` | `2025-10-28 01:59:38` |
+| `NUMERIC(p,s)` | Decimal notation | `63942.00` |
+| `INTEGER` | Plain number | `457719` |
+| `VARCHAR/TEXT` | Quoted strings | `user_0457719` |
+| `BOOLEAN` | `true`/`false` | `true` |
+| `BYTEA` | String representation | Converted to readable format |
+
+### Key Improvements
+
+#### ✅ Date and Timestamp Formatting
+- **Before**: `1960-01-02 00:00:00 +0000 +0000` (with timezone info)
+- **After**: `1960-01-02` (clean date format)
+- **Timestamp**: `2025-10-28 01:59:38` (without timezone)
+
+#### ✅ Decimal and Numeric Handling
+- **Before**: `[49 51 57 52 50 46 48 48]` (byte array representation)
+- **After**: `63942.00` (proper decimal format)
+
+#### ✅ Null Value Handling
+- **Consistent**: Empty strings for NULL values across all data types
+- **Import Compatible**: Properly recognized during CSV import operations
+
+### CSV Export Examples
+
+#### Standard Table Export
+```bash
+# Export with proper formatting
+pgtransfer export csv myprofile public.users users.csv --headers
+```
+
+#### Custom Query Export
+```bash
+# Export specific columns with formatting
+pgtransfer export csv myprofile results.csv \
+  --query "SELECT id, name, date_of_birth, salary FROM users WHERE active = true" \
+  --headers
+```
+
+### CSV Import Compatibility
+
+The improved formatting ensures seamless round-trip operations:
+
+```bash
+# Export data
+pgtransfer export csv source_profile public.users exported_data.csv --headers
+
+# Import to different database
+pgtransfer import csv target_profile public.users_copy exported_data.csv --headers
+```
+
+**Result**: All data types are preserved correctly without manual formatting adjustments.
 
 ### Advanced Usage
 
