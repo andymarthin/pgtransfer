@@ -73,9 +73,7 @@ func FormatCSVValue(v interface{}) string {
 		// For any other type, convert to string and clean up
 		str := fmt.Sprintf("%v", val)
 		// Remove timezone information if present
-		if strings.Contains(str, " +0000 +0000") {
-			str = strings.Replace(str, " +0000 +0000", "", -1)
-		}
+		str = strings.Replace(str, " +0000 +0000", "", -1)
 		// Clean up byte array representations like [54 51 57 52 50 46 48 48]
 		if strings.HasPrefix(str, "[") && strings.HasSuffix(str, "]") && strings.Contains(str, " ") {
 			// This looks like a byte array representation, try to convert it
@@ -390,7 +388,7 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	defer file.Close()
 
 	reader := csv.NewReader(file)
-	
+
 	// Read header
 	headers, err := reader.Read()
 	if err != nil {
@@ -408,7 +406,7 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	if err != nil {
 		return fmt.Errorf("failed to count CSV rows: %w", err)
 	}
-	
+
 	totalRows := int64(len(records) - 1) // Exclude header
 	if totalRows <= 0 {
 		return fmt.Errorf("no data rows found in %s", importPath)

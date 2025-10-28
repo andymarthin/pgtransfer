@@ -79,7 +79,7 @@ func runCSVExport(cmd *cobra.Command, args []string) error {
 		}
 		rawTableName := args[1]
 		outputFile = args[2]
-		
+
 		// Handle schema.table format or use schema flag
 		if strings.Contains(rawTableName, ".") {
 			// Table name already includes schema (e.g., "public.users")

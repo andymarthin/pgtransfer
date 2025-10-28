@@ -54,7 +54,7 @@ func runCSVImport(cmd *cobra.Command, args []string) error {
 	profileName := args[0]
 	rawTableName := args[1]
 	inputFile := args[2]
-	
+
 	// Handle schema.table format or use schema flag
 	var tableName string
 	if strings.Contains(rawTableName, ".") {

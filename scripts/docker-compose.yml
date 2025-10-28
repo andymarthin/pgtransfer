@@ -46,25 +46,22 @@ services:
 
   # Optional: SSH server for testing SSH tunnel functionality
   ssh-server:
-    image: linuxserver/openssh-server:latest
+    image: rastasheep/ubuntu-sshd:18.04
     container_name: pgtransfer-ssh-server
     restart: unless-stopped
     environment:
-      PUID: 1000
-      PGID: 1000
-      TZ: UTC
-      PUBLIC_KEY_FILE: /config/authorized_keys
-      SUDO_ACCESS: false
-      PASSWORD_ACCESS: true
-      USER_PASSWORD: sshpass
-      USER_NAME: sshuser
+      SSH_USERS: "sshuser:1000:1000:sshpass"
     ports:
-      - "2222:2222"
-    volumes:
-      - ssh_config:/config
-      - ./ssh/authorized_keys:/config/authorized_keys:ro
+      - "2222:22"
     networks:
       - pgtransfer-network
+    command: >
+      sh -c "
+        echo 'AllowTcpForwarding yes' >> /etc/ssh/sshd_config &&
+        echo 'GatewayPorts yes' >> /etc/ssh/sshd_config &&
+        echo 'PermitTunnel yes' >> /etc/ssh/sshd_config &&
+        /usr/sbin/sshd -D
+      "
 
 volumes:
   postgres_data:
