@@ -10,11 +10,11 @@ import (
 )
 
 var (
-	profileName                                                        string
-	testUser, testPassword, testHost, testDbURL, testDatabase          string
+	profileName                                                              string
+	testUser, testPassword, testHost, testDbURL, testDatabase                string
 	testSSHHost, testSSHUser, testSSHKey, testSSHPassword, testSSHPassphrase string
-	testSSLMode                                                        string
-	testPort, testSSHPort, testSSHTimeout                              int
+	testSSLMode                                                              string
+	testPort, testSSHPort, testSSHTimeout                                    int
 )
 
 var testConnectionCmd = &cobra.Command{
@@ -144,7 +144,7 @@ func hasTestConnectionFlags(cmd *cobra.Command) bool {
 		"user", "password", "host", "port", "database", "db", "sslmode",
 		"ssh-host", "ssh-user", "ssh-key", "ssh-passphrase", "ssh-password", "ssh-port", "ssh-timeout",
 	}
-	
+
 	for _, flag := range connectionFlags {
 		if cmd.Flags().Changed(flag) {
 			return true

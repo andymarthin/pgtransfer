@@ -16,11 +16,11 @@ import (
 )
 
 var (
-	flagUser, flagPassword, flagHost, flagDbURL, flagDatabase          string
+	flagUser, flagPassword, flagHost, flagDbURL, flagDatabase                string
 	flagSSHHost, flagSSHUser, flagSSHKey, flagSSHPassword, flagSSHPassphrase string
-	flagSSLMode                                                        string
-	flagPort, flagSSHPort, flagSSHTimeout                              int
-	flagForce, flagInteractive, flagSkipTest, flagNonInteractive       bool
+	flagSSLMode                                                              string
+	flagPort, flagSSHPort, flagSSHTimeout                                    int
+	flagForce, flagInteractive, flagSkipTest, flagNonInteractive             bool
 )
 
 var addCmd = &cobra.Command{
@@ -55,7 +55,7 @@ var addCmd = &cobra.Command{
 					fmt.Println()
 				}
 			}
-			
+
 			fmt.Print("Do you want to overwrite it? [y/N]: ")
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
@@ -83,7 +83,7 @@ var addCmd = &cobra.Command{
 		// 1. --non-interactive flag is used, or
 		// 2. --interactive=false is explicitly set, or
 		// 3. Any connection flags are provided (indicating non-interactive intent)
-		useInteractive := !flagNonInteractive && 
+		useInteractive := !flagNonInteractive &&
 			(flagInteractive || (!cmd.Flags().Changed("interactive") && !hasConnectionFlags(cmd)))
 
 		if useInteractive {
@@ -193,7 +193,7 @@ func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config
 	defaultPort := "5432"
 	defaultDatabase := ""
 	defaultSSLMode := "disable"
-	
+
 	if existingProfile != nil {
 		defaultUser = existingProfile.User
 		defaultHost = existingProfile.Host
@@ -218,7 +218,7 @@ func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config
 	defaultSSHTimeout := "10"
 	defaultAuthMethod := "k"
 	defaultKeyPath := ""
-	
+
 	if existingProfile != nil && existingProfile.SSH.Enabled {
 		defaultUseSSH = "y"
 		defaultSSHHost = existingProfile.SSH.Host
@@ -241,7 +241,7 @@ func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config
 		sshCfg.User = prompt("SSH user", defaultSSHUser)
 		portStr := prompt("SSH port", defaultSSHPort)
 		sshCfg.Port, _ = strconv.Atoi(portStr)
-		
+
 		// Ask user to choose authentication method
 		authMethod := strings.ToLower(prompt("SSH authentication method - use (k)ey or (p)assword? [k/p]", defaultAuthMethod))
 		if authMethod == "p" || authMethod == "password" {
@@ -256,7 +256,7 @@ func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config
 				}
 			}
 		}
-		
+
 		timeoutStr := prompt("SSH timeout (seconds)", defaultSSHTimeout)
 		sshCfg.Timeout, _ = strconv.Atoi(timeoutStr)
 	}
@@ -280,7 +280,7 @@ func hasConnectionFlags(cmd *cobra.Command) bool {
 		"user", "password", "host", "port", "database", "db", "sslmode",
 		"ssh-host", "ssh-user", "ssh-key", "ssh-passphrase", "ssh-password", "ssh-port", "ssh-timeout",
 	}
-	
+
 	for _, flag := range connectionFlags {
 		if cmd.Flags().Changed(flag) {
 			return true

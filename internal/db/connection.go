@@ -138,7 +138,7 @@ func sshAuth(sshCfg config.SSHConfig) ([]ssh.AuthMethod, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to read private key: %w", err)
 		}
-		
+
 		var signer ssh.Signer
 		if sshCfg.Passphrase != "" {
 			// Try parsing with passphrase first
@@ -147,7 +147,7 @@ func sshAuth(sshCfg config.SSHConfig) ([]ssh.AuthMethod, error) {
 			// Try parsing without passphrase
 			signer, err = ssh.ParsePrivateKey(key)
 		}
-		
+
 		if err != nil {
 			return nil, fmt.Errorf("invalid private key: %w", err)
 		}
