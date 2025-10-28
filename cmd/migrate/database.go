@@ -13,16 +13,16 @@ import (
 
 var (
 	// Migration options
-	migrateSchemaOnly   bool
-	migrateDataOnly     bool
-	migrateTables       string
-	migrateValidate     bool
+	migrateSchemaOnly     bool
+	migrateDataOnly       bool
+	migrateTables         string
+	migrateValidate       bool
 	migrateEnableRollback bool
-	migrateVerbose      bool
-	migrateTimeout      int
-	migrateOverwrite    bool
-	migrateBatchSize    int
-	
+	migrateVerbose        bool
+	migrateTimeout        int
+	migrateOverwrite      bool
+	migrateBatchSize      int
+
 	// Database override options
 	migrateSourceDatabase string
 	migrateTargetDatabase string
@@ -36,11 +36,14 @@ var databaseCmd = &cobra.Command{
 
 This command performs a complete database migration including schema and data transfer.
 You can use either two different profiles or the same profile with database overrides.
+Database override flags can be used with both modes for maximum flexibility.
 
-Mode 1: Different profiles
+Mode 1: Different profiles (with optional database overrides)
   pgtransfer migrate database source_profile target_profile
+  pgtransfer migrate database source_profile target_profile --source-database custom_db
+  pgtransfer migrate database source_profile target_profile --target-database custom_db
 
-Mode 2: Same profile with database overrides
+Mode 2: Same profile with database overrides (both flags required)
   pgtransfer migrate database profile --source-database source_db --target-database target_db
 
 You can customize the migration with various options for schema-only, data-only, 
@@ -49,6 +52,15 @@ specific tables, validation, and rollback support.
 Examples:
   # Full database migration with different profiles
   pgtransfer migrate database source_profile target_profile
+
+  # Different profiles with source database override
+  pgtransfer migrate database source_profile target_profile --source-database custom_source_db
+
+  # Different profiles with target database override
+  pgtransfer migrate database source_profile target_profile --target-database custom_target_db
+
+  # Different profiles with both database overrides
+  pgtransfer migrate database source_profile target_profile --source-database custom_source --target-database custom_target
 
   # Same profile with different databases
   pgtransfer migrate database myprofile --source-database prod_db --target-database staging_db
@@ -59,8 +71,8 @@ Examples:
   # Data-only migration (assumes schema exists)
   pgtransfer migrate database source_profile target_profile --data-only
 
-  # Migrate specific tables with same profile
-  pgtransfer migrate database myprofile --source-database db1 --target-database db2 --tables "users,orders"
+  # Migrate specific tables with database overrides
+  pgtransfer migrate database source_profile target_profile --source-database db1 --target-database db2 --tables "users,orders"
 
   # Migration with validation
   pgtransfer migrate database source_profile target_profile --validate
@@ -73,7 +85,7 @@ Examples:
 
 func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 	start := time.Now()
-	
+
 	// Validate mutually exclusive options
 	if migrateSchemaOnly && migrateDataOnly {
 		return fmt.Errorf("--schema-only and --data-only are mutually exclusive")
@@ -87,23 +99,18 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 
 	var sourceProfile, targetProfile config.Profile
 	var sourceProfileName, targetProfileName string
-	
+
 	// Determine migration mode
 	if len(args) == 2 {
-		// Mode 1: Two different profiles
+		// Mode 1: Two different profiles (with optional database overrides)
 		sourceProfileName = args[0]
 		targetProfileName = args[1]
-		
+
 		// Validate profiles are different
 		if sourceProfileName == targetProfileName {
 			return fmt.Errorf("source and target profiles cannot be the same when using two profiles")
 		}
-		
-		// Validate database override flags are not used
-		if migrateSourceDatabase != "" || migrateTargetDatabase != "" {
-			return fmt.Errorf("--source-database and --target-database flags cannot be used with two profiles")
-		}
-		
+
 		// Load source profile
 		var exists bool
 		sourceProfile, exists = cfg.Profiles[sourceProfileName]
@@ -116,36 +123,44 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 		if !exists {
 			return fmt.Errorf("target profile '%s' not found", targetProfileName)
 		}
-		
+
+		// Apply database overrides if provided
+		if migrateSourceDatabase != "" {
+			sourceProfile.Database = migrateSourceDatabase
+		}
+		if migrateTargetDatabase != "" {
+			targetProfile.Database = migrateTargetDatabase
+		}
+
 	} else if len(args) == 1 {
 		// Mode 2: Same profile with database overrides
 		profileName := args[0]
-		
+
 		// Validate database override flags are provided
 		if migrateSourceDatabase == "" || migrateTargetDatabase == "" {
 			return fmt.Errorf("--source-database and --target-database flags are required when using single profile")
 		}
-		
+
 		// Validate databases are different
 		if migrateSourceDatabase == migrateTargetDatabase {
 			return fmt.Errorf("source and target databases cannot be the same")
 		}
-		
+
 		// Load base profile
 		baseProfile, exists := cfg.Profiles[profileName]
 		if !exists {
 			return fmt.Errorf("profile '%s' not found", profileName)
 		}
-		
+
 		// Create source and target profiles with database overrides
 		sourceProfile = baseProfile
 		sourceProfile.Database = migrateSourceDatabase
 		sourceProfileName = fmt.Sprintf("%s(%s)", profileName, migrateSourceDatabase)
-		
+
 		targetProfile = baseProfile
 		targetProfile.Database = migrateTargetDatabase
 		targetProfileName = fmt.Sprintf("%s(%s)", profileName, migrateTargetDatabase)
-		
+
 	} else {
 		return fmt.Errorf("invalid number of arguments")
 	}
@@ -165,21 +180,21 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 
 	// Create migration options
 	migrationOpts := &io.MigrationOptions{
-		SourceProfile:   sourceProfile,
-		TargetProfile:   targetProfile,
-		SchemaOnly:      migrateSchemaOnly,
-		DataOnly:        migrateDataOnly,
-		Tables:          tableList,
-		Validate:        migrateValidate,
-		EnableRollback:  migrateEnableRollback,
-		Verbose:         migrateVerbose,
-		Timeout:         migrateTimeout,
-		Overwrite:       migrateOverwrite,
-		BatchSize:       migrateBatchSize,
+		SourceProfile:  sourceProfile,
+		TargetProfile:  targetProfile,
+		SchemaOnly:     migrateSchemaOnly,
+		DataOnly:       migrateDataOnly,
+		Tables:         tableList,
+		Validate:       migrateValidate,
+		EnableRollback: migrateEnableRollback,
+		Verbose:        migrateVerbose,
+		Timeout:        migrateTimeout,
+		Overwrite:      migrateOverwrite,
+		BatchSize:      migrateBatchSize,
 	}
 
-	// Perform migration
-	err = io.MigrateDatabaseWithOptions(migrationOpts)
+	// Perform migration using connection-aware function for SSH support
+	err = io.MigrateDatabaseWithConnection(migrationOpts)
 	if err != nil {
 		log.Failure("migrate database", sourceProfileName, err.Error(), start)
 		return fmt.Errorf("database migration failed: %w", err)
@@ -194,19 +209,19 @@ func init() {
 	// Schema/Data options
 	databaseCmd.Flags().BoolVar(&migrateSchemaOnly, "schema-only", false, "Migrate schema only (no data)")
 	databaseCmd.Flags().BoolVar(&migrateDataOnly, "data-only", false, "Migrate data only (assumes schema exists)")
-	
+
 	// Table selection
 	databaseCmd.Flags().StringVar(&migrateTables, "tables", "", "Comma-separated list of tables to migrate")
-	
+
 	// Database override options
 	databaseCmd.Flags().StringVar(&migrateSourceDatabase, "source-database", "", "Override source database name (use with single profile)")
 	databaseCmd.Flags().StringVar(&migrateTargetDatabase, "target-database", "", "Override target database name (use with single profile)")
-	
+
 	// Validation and safety
 	databaseCmd.Flags().BoolVar(&migrateValidate, "validate", false, "Validate migration before execution")
 	databaseCmd.Flags().BoolVar(&migrateEnableRollback, "enable-rollback", false, "Enable rollback support (creates backup)")
 	databaseCmd.Flags().BoolVar(&migrateOverwrite, "overwrite", false, "Overwrite existing data in target database")
-	
+
 	// Performance and output
 	databaseCmd.Flags().BoolVar(&migrateVerbose, "verbose", false, "Enable verbose output")
 	databaseCmd.Flags().IntVar(&migrateTimeout, "timeout", 3600, "Migration timeout in seconds")
