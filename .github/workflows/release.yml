@@ -73,7 +73,7 @@ jobs:
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           COMMIT_HASH=$(git rev-parse --short HEAD)
           
-          go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }} -X main.commit=${COMMIT_HASH} -X main.date=${BUILD_DATE}" \
+          go build -ldflags="-s -w -X github.com/andymarthin/pgtransfer/cmd.Version=${{ steps.version.outputs.VERSION }} -X github.com/andymarthin/pgtransfer/cmd.Commit=${COMMIT_HASH} -X github.com/andymarthin/pgtransfer/cmd.Date=${BUILD_DATE}" \
             -o build/${BINARY_NAME} .
           
           # Create archive
