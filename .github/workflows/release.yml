@@ -145,37 +145,3 @@ jobs:
             artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Optional: Build and push Docker image
-  docker:
-    name: Build Docker Image
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # To enable Docker Hub pushing:
-      # 1. Add DOCKER_USERNAME and DOCKER_PASSWORD secrets to your repository
-      # 2. Uncomment the login step below
-      # 3. Set push: true in the build step
-      
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: false
-          tags: |
-            pgtransfer:${{ steps.version.outputs.VERSION }}
-            pgtransfer:latest
-          build-args: |
-            VERSION=${{ steps.version.outputs.VERSION }}
