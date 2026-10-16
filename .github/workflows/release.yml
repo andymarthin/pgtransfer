@@ -30,26 +30,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v7
         with:
           go-version: '1.24'
 
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Cache Go modules
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
 
       - name: Download dependencies
         run: go mod download
@@ -85,7 +75,7 @@ jobs:
           fi
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pgtransfer-${{ matrix.suffix }}
           path: build/pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.*
@@ -96,31 +86,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
       - name: Generate changelog
         id: changelog
         run: |
-          # Get the previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          
-          if [ -n "$PREV_TAG" ]; then
-            echo "## What's Changed" > changelog.md
-            echo "" >> changelog.md
-            git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD >> changelog.md
+          # Prefer a hand-written RELEASE_NOTES.md when present; otherwise fall
+          # back to an auto-generated changelog.
+          if [ -f RELEASE_NOTES.md ]; then
+            cp RELEASE_NOTES.md changelog.md
           else
-            echo "## Initial Release" > changelog.md
-            echo "" >> changelog.md
-            echo "First release of PGTransfer - PostgreSQL data transfer tool with SSH tunnel support." >> changelog.md
+            # Get the previous tag
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+            if [ -n "$PREV_TAG" ]; then
+              echo "## What's Changed" > changelog.md
+              echo "" >> changelog.md
+              git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD >> changelog.md
+            else
+              echo "## Initial Release" > changelog.md
+              echo "" >> changelog.md
+              echo "First release of PGTransfer - PostgreSQL data transfer tool with SSH tunnel support." >> changelog.md
+            fi
           fi
           
           echo "" >> changelog.md
@@ -134,7 +130,7 @@ jobs:
           echo "- **macOS (Apple Silicon)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz\`" >> changelog.md
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: Release ${{ steps.version.outputs.VERSION }}
