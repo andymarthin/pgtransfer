@@ -70,10 +70,29 @@ cd ..
   - Username: `sshuser`
   - Password: `sshpass`
   - Built from [`ssh/Dockerfile`](ssh/Dockerfile) with TCP forwarding enabled.
+  - The tunnel user/password can be overridden at build time with the
+    `SSH_USER` / `SSH_PASSWORD` build args (the defaults above are used when
+    they are not supplied).
 
 > When testing an SSH tunnel, set the database host to the compose service name
 > `postgres` (the SSH container reaches the DB over the Docker network), e.g.
 > `--host postgres --port 5432`.
+
+### Running the automated integration tests
+
+With the stack up you can run the build-tagged integration suite (see the main
+[README](../README.md#test-suite) for the full list of environment variables):
+
+```bash
+PGTRANSFER_TEST_DSN='postgres://testuser:testpass@localhost:5433/testdb?sslmode=disable' \
+PGTRANSFER_TEST_SSH_HOST=localhost PGTRANSFER_TEST_SSH_PORT=2222 \
+PGTRANSFER_TEST_SSH_USER=sshuser  PGTRANSFER_TEST_SSH_PASSWORD=sshpass \
+PGTRANSFER_TEST_DB_HOST=postgres \
+  go test -tags=integration -v ./internal/io/...
+```
+
+Add `PGTRANSFER_TEST_REQUIRE=1` to turn missing prerequisites into failures
+instead of skips (this is how CI runs them).
 
 ## 🗄️ Database Schema
 

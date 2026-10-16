@@ -3,6 +3,7 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.24+-blue.svg)](https://golang.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-blue.svg)](https://postgresql.org)
+[![CI](https://github.com/andymarthin/pgtransfer/actions/workflows/ci.yml/badge.svg)](https://github.com/andymarthin/pgtransfer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 **PGTransfer** is a powerful, secure, and user-friendly command-line tool for PostgreSQL data operations. Built with Go, it provides seamless data import/export capabilities with advanced features like SSH tunneling, connection profiles, and interactive configuration.
@@ -930,13 +931,62 @@ go mod tidy
 # Build for development
 go build -o pgtransfer .
 
-# Run tests
+# Fast unit tests (no database required)
 go test ./...
 
 # Run linting
 go vet ./...
 staticcheck ./...
 ```
+
+### Test Suite
+
+The project has two layers of tests:
+
+| Layer | Command | Requires | Scope |
+|-------|---------|----------|-------|
+| **Unit** | `go test ./...` | nothing | Pure logic: DSN building, config lifecycle, dump-format detection, CSV value formatting, SSH auth selection, duration formatting |
+| **Integration** | `go test -tags=integration ./internal/io/...` | a live PostgreSQL + SSH server | Real round-trips: `pg_dump`/`pg_restore`, CSV export/import, and the SSH tunnel path |
+
+Unit tests run in CI on every push and pull request. Integration tests run in a
+separate CI job that provisions PostgreSQL and the repository SSH image.
+
+#### Running the integration tests
+
+Integration tests are guarded by the `integration` build tag and read their
+settings from environment variables. They **skip** when the prerequisites are
+absent — so day-to-day `go test ./...` never needs a database:
+
+```bash
+# 1. Start the local test stack
+cd scripts && docker compose up -d && cd ..
+
+# 2. Run the integration tests against it
+PGTRANSFER_TEST_DSN='postgres://testuser:testpass@localhost:5433/testdb?sslmode=disable' \
+PGTRANSFER_TEST_SSH_HOST=localhost PGTRANSFER_TEST_SSH_PORT=2222 \
+PGTRANSFER_TEST_SSH_USER=sshuser  PGTRANSFER_TEST_SSH_PASSWORD=sshpass \
+PGTRANSFER_TEST_DB_HOST=postgres \
+  go test -tags=integration -v ./internal/io/...
+```
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PGTRANSFER_TEST_DSN` | *(unset)* | DSN of the test database; **required** for the direct tests |
+| `PGTRANSFER_TEST_REQUIRE` | *(unset)* | When `1`, missing prerequisites **fail** instead of skipping (set by CI so a broken pipeline can't pass green) |
+| `PGTRANSFER_TEST_SSH_HOST` | `localhost` | SSH server host for the tunnel test |
+| `PGTRANSFER_TEST_SSH_PORT` | `2222` | SSH server port |
+| `PGTRANSFER_TEST_SSH_USER` | *(unset)* | SSH user; when unset the tunnel test skips |
+| `PGTRANSFER_TEST_SSH_PASSWORD` | *(unset)* | SSH password |
+| `PGTRANSFER_TEST_DB_HOST` | `postgres` | Database host **as seen from the SSH server** |
+| `PGTRANSFER_TEST_DB_PORT` | `5432` | Database port as seen from the SSH server |
+| `PGTRANSFER_TEST_DB_USER` | `testuser` | Database user |
+| `PGTRANSFER_TEST_DB_PASSWORD` | `testpass` | Database password |
+| `PGTRANSFER_TEST_DB_NAME` | `testdb` | Database name |
+
+> **Note:** `PGTRANSFER_TEST_DB_HOST` is resolved from the *SSH server's* point of
+> view, not the test host. With the Docker stack that is the compose service name
+> `postgres`; in CI the SSH container reaches the host-published database via
+> `host.docker.internal`.
 
 ### Local Testing with Docker
 

@@ -229,15 +229,12 @@ type RestoreOptions struct {
 	Clean bool
 	// Timeout, when > 0, aborts the restore after the given number of seconds.
 	Timeout int
-	// IgnoreErrors tolerates non-fatal restore errors (e.g. minor version
-	// mismatches such as "unrecognized configuration parameter") reported by
-	// pg_restore. When true, a non-zero exit is treated as a warning rather
-	// than a failure, provided the process did not time out.
-	IgnoreErrors bool
-	// Strict forces any restore error to be reported as a failure, overriding
-	// IgnoreErrors. Note that pg_restore exits with code 1 when it encounters
-	// ignorable errors, so Strict defaults to false at the CLI level to remain
-	// resilient to client/server version skew.
+	// Strict makes any restore error fatal. By default restore tolerates
+	// non-fatal errors reported by pg_restore (e.g. minor client/server
+	// version mismatches such as "unrecognized configuration parameter").
+	// Note that pg_restore exits with code 1 when it encounters ignorable
+	// errors, so the default (Strict == false) keeps restores resilient to
+	// version skew.
 	Strict bool
 }
 
