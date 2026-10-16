@@ -231,31 +231,63 @@ psql -h localhost -p 5433 -U username -d database
 
 ### Installation
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/yourusername/pgtransfer.git
-   cd pgtransfer
-   ```
+#### Option A — prebuilt binary (no Go required)
 
-2. **Install dependencies and build:**
-   ```bash
-   go mod tidy
-   go build -o pgtransfer .
-   ```
+Download the archive for your platform from the
+[releases page](https://github.com/andymarthin/pgtransfer/releases/latest):
 
-3. **Verify installation:**
-   ```bash
-   ./pgtransfer --help
-   ```
+| Platform | Asset |
+| --- | --- |
+| macOS (Apple Silicon) | `pgtransfer-<version>-darwin-arm64.tar.gz` |
+| macOS (Intel) | `pgtransfer-<version>-darwin-amd64.tar.gz` |
+| Linux x86-64 | `pgtransfer-<version>-linux-amd64.tar.gz` |
+| Linux ARM64 | `pgtransfer-<version>-linux-arm64.tar.gz` |
 
-4. **Optional: Install globally:**
-   ```bash
-   # macOS/Linux
-   sudo mv pgtransfer /usr/local/bin/
-   
-   # Or add to your PATH
-   export PATH=$PATH:$(pwd)
-   ```
+For example, on macOS (Apple Silicon):
+
+```bash
+V=v1.1.0
+A=darwin-arm64
+curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/$V/pgtransfer-$V-$A.tar.gz"
+tar xzf "pgtransfer-$V-$A.tar.gz"
+sudo mv pgtransfer /usr/local/bin/
+pgtransfer version
+```
+
+Optionally verify the download against the published checksums:
+
+```bash
+curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/$V/SHA256SUMS"
+shasum -a 256 -c SHA256SUMS --ignore-missing   # Linux: sha256sum -c ...
+```
+
+#### Option B — build from source
+
+Requires **Go 1.25 or higher**.
+
+```bash
+git clone https://github.com/andymarthin/pgtransfer.git
+cd pgtransfer
+go mod tidy
+go build -o pgtransfer .
+sudo mv pgtransfer /usr/local/bin/     # or: export PATH="$PATH:$PWD"
+```
+
+#### Option C — `go install`
+
+Requires **Go 1.25 or higher**. Installs into `$(go env GOPATH)/bin`, which must
+be on your `PATH`.
+
+```bash
+go install github.com/andymarthin/pgtransfer@latest
+```
+
+#### Verify
+
+```bash
+pgtransfer version          # e.g. "pgtransfer v1.1.0"
+pgtransfer --help
+```
 
 ## 📋 Usage
 
