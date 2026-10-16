@@ -2,6 +2,7 @@ package io
 
 import (
 	"database/sql/driver"
+	"errors"
 	"testing"
 	"time"
 )
@@ -44,6 +45,45 @@ func TestFormatCSVValue(t *testing.T) {
 				t.Fatalf("FormatCSVValue(%#v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// valuerErr implements driver.Valuer and always errors.
+type valuerErr struct{}
+
+func (valuerErr) Value() (driver.Value, error) { return nil, errors.New("nope") }
+
+// byteSlice is an arbitrary type that stringifies to a bracketed byte list.
+type byteSlice []byte
+
+func TestFormatCSVValue_DefaultBranches(t *testing.T) {
+	tests := []struct {
+		name string
+		in   interface{}
+		want string
+	}{
+		// A struct with no special handling falls through to the default case.
+		{name: "plain struct", in: struct{ A int }{A: 7}, want: "{7}"},
+		// Bracketed, space-separated byte list is decoded back to a string.
+		{name: "byte array repr", in: byteSlice{104, 105}, want: "hi"},
+		// Bracketed list containing a non-byte token is returned unchanged.
+		{name: "invalid byte array", in: "[abc def]", want: "[abc def]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FormatCSVValue(tc.in); got != tc.want {
+				t.Fatalf("FormatCSVValue(%#v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatCSVValue_ValuerError(t *testing.T) {
+	// A Valuer whose Value() errors must fall back to a string representation
+	// of the Valuer itself rather than panicking.
+	got := FormatCSVValue(valuerErr{})
+	if got == "" {
+		t.Fatalf("expected a non-empty fallback for a failing Valuer")
 	}
 }
 
