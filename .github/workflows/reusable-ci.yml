@@ -16,7 +16,7 @@ jobs:
   # ---------------------------------------------------------------------------
   unit:
     name: Build, vet & unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -60,7 +60,7 @@ jobs:
   # ---------------------------------------------------------------------------
   integration:
     name: Integration tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
