@@ -7,14 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"time"
 
 	"github.com/andymarthin/pgtransfer/internal/config"
+	"github.com/andymarthin/pgtransfer/internal/sshx"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"github.com/lib/pq"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
 )
 
 // DBConnection represents a PostgreSQL connection, possibly via SSH.
@@ -68,7 +67,7 @@ func connectViaSSH(p config.Profile) (*DBConnection, error) {
 
 	utils.PrintInfo(nil, "🔐 Connecting via SSH tunnel to %s@%s...", p.SSH.User, p.SSH.Host)
 
-	authMethods, err := sshAuth(p.SSH)
+	authMethods, err := sshx.BuildAuthMethods(configToSSH(p.SSH))
 	if err != nil {
 		return nil, fmt.Errorf("SSH auth setup failed: %w", err)
 	}
@@ -124,46 +123,20 @@ func pingDatabase(db *sql.DB) error {
 }
 
 func sshAuth(sshCfg config.SSHConfig) ([]ssh.AuthMethod, error) {
-	var auths []ssh.AuthMethod
+	return sshx.BuildAuthMethods(configToSSH(sshCfg))
+}
 
-	// Try ssh-agent first if SSH_AUTH_SOCK is available
-	if agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); err == nil {
-		agentClient := agent.NewClient(agentConn)
-		auths = append(auths, ssh.PublicKeysCallback(agentClient.Signers))
+// configToSSH adapts a config.SSHConfig into the cycle-free sshx.Config.
+func configToSSH(c config.SSHConfig) sshx.Config {
+	return sshx.Config{
+		User:       c.User,
+		Host:       c.Host,
+		Port:       c.Port,
+		KeyPath:    c.KeyPath,
+		Passphrase: c.Passphrase,
+		Password:   c.Password,
+		Timeout:    c.Timeout,
 	}
-
-	// If a specific key path is provided, try to use it
-	if sshCfg.KeyPath != "" {
-		key, err := os.ReadFile(os.ExpandEnv(sshCfg.KeyPath))
-		if err != nil {
-			return nil, fmt.Errorf("failed to read private key: %w", err)
-		}
-
-		var signer ssh.Signer
-		if sshCfg.Passphrase != "" {
-			// Try parsing with passphrase first
-			signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(sshCfg.Passphrase))
-		} else {
-			// Try parsing without passphrase
-			signer, err = ssh.ParsePrivateKey(key)
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf("invalid private key: %w", err)
-		}
-		auths = append(auths, ssh.PublicKeys(signer))
-	}
-
-	// Add password authentication if provided
-	if sshCfg.Password != "" {
-		auths = append(auths, ssh.Password(sshCfg.Password))
-	}
-
-	if len(auths) == 0 {
-		return nil, errors.New("no valid SSH authentication method found")
-	}
-
-	return auths, nil
 }
 
 // sshDialer implements pq.Dialer using an active SSH client.

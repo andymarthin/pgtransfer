@@ -17,7 +17,9 @@ scripts/
 │   ├── employees.csv        # Sample employees data
 │   └── complex-data.csv     # Complex data with edge cases
 └── ssh/                     # SSH configuration for testing
-    └── authorized_keys      # SSH public keys for testing
+    ├── Dockerfile           # Alpine sshd image (TCP forwarding + test user)
+    ├── authorized_keys      # SSH public keys for testing
+    └── sshd_config_custom   # Extra sshd settings
 ```
 
 ## 🚀 Quick Start
@@ -42,19 +44,20 @@ docker-compose ps
 cd ..
 ./pgtransfer profile add test-docker \
   --host localhost \
-  --port 5432 \
+  --port 5433 \
   --user testuser \
   --password testpass \
   --database testdb \
-  --ssl-mode disable
+  --sslmode disable
 
 # Test the connection
-./pgtransfer test-connection test-docker
+./pgtransfer test-connection --profile test-docker
 ```
 
 ### 3. Access Services
 
-- **PostgreSQL Database**: `localhost:5432`
+- **PostgreSQL Database**: `localhost:5433` (published on host port 5433 to avoid
+  clashing with a local PostgreSQL install; it is `5432` inside the Docker network)
   - Database: `testdb`
   - Username: `testuser`
   - Password: `testpass`
@@ -66,6 +69,11 @@ cd ..
 - **SSH Server** (for tunnel testing): `localhost:2222`
   - Username: `sshuser`
   - Password: `sshpass`
+  - Built from [`ssh/Dockerfile`](ssh/Dockerfile) with TCP forwarding enabled.
+
+> When testing an SSH tunnel, set the database host to the compose service name
+> `postgres` (the SSH container reaches the DB over the Docker network), e.g.
+> `--host postgres --port 5432`.
 
 ## 🗄️ Database Schema
 
@@ -137,16 +145,25 @@ The `test-data/` directory contains CSV files for testing import functionality:
 
 ### Dump Testing
 ```bash
-# Test database dump export (when implemented)
+# Test database dump export
 ./pgtransfer export dump test-docker testdb_backup.sql
-./pgtransfer export dump test-docker --schema-only testdb_schema.sql
+./pgtransfer export dump test-docker testdb_schema.sql --schema-only
+
+# Custom format with compression (produces a .dump archive)
+./pgtransfer export dump test-docker backup --format custom --compress
+
+# Restore a dump (format auto-detected: plain SQL vs. binary)
+./pgtransfer import dump test-docker testdb_backup.sql
+./pgtransfer import dump test-docker backup.dump --clean
 ```
 
 ### SSH Tunnel Testing
 ```bash
-# Create profile with SSH tunnel
+# Create profile with SSH tunnel.
+# The DB host is the compose service name ("postgres") because the SSH
+# container reaches the database over the Docker network.
 ./pgtransfer profile add test-ssh \
-  --host localhost \
+  --host postgres \
   --port 5432 \
   --user testuser \
   --password testpass \
@@ -155,6 +172,9 @@ The `test-data/` directory contains CSV files for testing import functionality:
   --ssh-port 2222 \
   --ssh-user sshuser \
   --ssh-password sshpass
+
+# Verify the tunnel
+./pgtransfer test-connection --profile test-ssh
 ```
 
 ## 🔐 SSH Testing Setup
@@ -254,7 +274,7 @@ docker exec -it pgtransfer-test-db psql -U testuser -d testdb -c "SELECT COUNT(*
 
 ### Common Issues
 
-1. **Port conflicts**: If ports 5432, 8080, or 2222 are in use, modify the ports in `docker-compose.yml`
+1. **Port conflicts**: If ports 5433, 8080, or 2222 are in use, modify the ports in `docker-compose.yml`
 
 2. **Permission issues**: Ensure Docker has proper permissions and the SSH authorized_keys file is readable
 

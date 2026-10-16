@@ -100,7 +100,8 @@ func performRollbackOperation(opts *io.MigrationOptions, backupFile string) erro
 
 	// Restore from backup
 	targetURL := config.BuildDSN(opts.TargetProfile)
-	if err := io.RestoreDatabaseSmart(targetURL, backupFile); err != nil {
+	restoreOpts := &io.RestoreOptions{Timeout: opts.Timeout}
+	if err := io.RestoreDatabaseSmartWithOptions(targetURL, backupFile, restoreOpts); err != nil {
 		rollbackBar.Finish()
 		return fmt.Errorf("failed to restore from backup: %w", err)
 	}

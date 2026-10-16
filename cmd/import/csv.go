@@ -103,19 +103,14 @@ func runCSVImport(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Create CSV options with batch size
+	// Create CSV options with batch size and header handling
 	options := &io.CSVOptions{
 		BatchSize: csvBatchSize,
+		HasHeader: csvHeaders,
 	}
 
-	// Import using batch processing
-	if csvBatchSize == 500 {
-		// Use default function for backward compatibility when using default batch size
-		return io.ImportCSV(dbConn.DB, tableName, inputFile)
-	} else {
-		// Use batch-enabled function when custom batch size is specified
-		return io.ImportCSVWithOptions(dbConn.DB, tableName, inputFile, options)
-	}
+	// Import using batch processing (options carry batch size + header flag)
+	return io.ImportCSVWithOptions(dbConn.DB, tableName, inputFile, options)
 }
 
 func init() {

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/andymarthin/pgtransfer/internal/utils"
@@ -170,14 +171,16 @@ func BuildDSN(p Profile) string {
 		ssl = p.SSLMode
 	}
 
+	// URL-encode user, password and database name so that special characters
+	// (e.g. '@', ':', '/', '?') do not corrupt the connection URL.
 	return fmt.Sprintf(
 		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		p.User,
-		p.Password,
+		url.QueryEscape(p.User),
+		url.QueryEscape(p.Password),
 		p.Host,
 		port,
-		p.Database,
-		ssl,
+		url.PathEscape(p.Database),
+		url.QueryEscape(ssl),
 	)
 }
 
