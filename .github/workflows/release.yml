@@ -9,10 +9,24 @@ permissions:
   contents: write  # Required for creating releases
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Gate the release on the full test suite. No binaries are built unless
+  #    every unit and integration test passes. Uses the same reusable pipeline
+  #    as CI so a release can only be cut from code that would pass a PR.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify
+    uses: ./.github/workflows/reusable-ci.yml
+
+  # ---------------------------------------------------------------------------
+  # 2. Cross-compile release binaries. Only reached once `verify` succeeds.
+  # ---------------------------------------------------------------------------
   build:
-    name: Build and Release
+    name: Build ${{ matrix.suffix }}
+    needs: verify
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: true
       matrix:
         include:
           - goos: linux
@@ -36,6 +50,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.24'
+          cache: true
 
       - name: Get version from tag
         id: version
@@ -43,9 +58,6 @@ jobs:
 
       - name: Download dependencies
         run: go mod download
-
-      - name: Run tests
-        run: go test -v ./...
 
       - name: Build binary
         env:
@@ -55,31 +67,43 @@ jobs:
         run: |
           mkdir -p build
           BINARY_NAME="pgtransfer"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME="${BINARY_NAME}.exe"
-          fi
-          
+
           # Get build information
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           COMMIT_HASH=$(git rev-parse --short HEAD)
-          
+
           go build -ldflags="-s -w -X github.com/andymarthin/pgtransfer/cmd.Version=${{ steps.version.outputs.VERSION }} -X github.com/andymarthin/pgtransfer/cmd.Commit=${COMMIT_HASH} -X github.com/andymarthin/pgtransfer/cmd.Date=${BUILD_DATE}" \
             -o build/${BINARY_NAME} .
-          
-          # Create archive
+
+      # Smoke-test the artifact: the binary must run and report the tag version.
+      - name: Smoke test binary (version)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          out="$(./build/pgtransfer version)"
+          echo "$out"
+          echo "$out" | grep -q "${{ steps.version.outputs.VERSION }}" \
+            || { echo "binary did not report version ${{ steps.version.outputs.VERSION }}" >&2; exit 1; }
+
+      - name: Package archive
+        run: |
           cd build
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.zip ${BINARY_NAME}
-          else
-            tar -czf pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.tar.gz ${BINARY_NAME}
-          fi
+          tar -czf pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.tar.gz pgtransfer
+
+      - name: Checksums
+        run: |
+          cd build
+          shasum -a 256 pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.tar.gz \
+            > pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.tar.gz.sha256
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: pgtransfer-${{ matrix.suffix }}
-          path: build/pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.*
+          path: build/pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.tar.gz*
 
+  # ---------------------------------------------------------------------------
+  # 3. Publish the GitHub release with all binaries and checksums attached.
+  # ---------------------------------------------------------------------------
   release:
     name: Create Release
     needs: build
@@ -97,47 +121,53 @@ jobs:
         with:
           path: artifacts
 
-      - name: Generate changelog
-        id: changelog
+      # Combined SHA256SUMS for easy verification of every download.
+      - name: Combine checksums
+        run: |
+          find artifacts -name '*.sha256' -exec cat {} \; | sort -k2 > artifacts/SHA256SUMS
+          cat artifacts/SHA256SUMS
+
+      - name: Generate release body
         run: |
           # Prefer a hand-written RELEASE_NOTES.md when present; otherwise fall
           # back to an auto-generated changelog.
           if [ -f RELEASE_NOTES.md ]; then
-            cp RELEASE_NOTES.md changelog.md
+            cp RELEASE_NOTES.md release-body.md
           else
-            # Get the previous tag
             PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
             if [ -n "$PREV_TAG" ]; then
-              echo "## What's Changed" > changelog.md
-              echo "" >> changelog.md
-              git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD >> changelog.md
+              echo "## What's Changed" > release-body.md
+              echo "" >> release-body.md
+              git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD >> release-body.md
             else
-              echo "## Initial Release" > changelog.md
-              echo "" >> changelog.md
-              echo "First release of PGTransfer - PostgreSQL data transfer tool with SSH tunnel support." >> changelog.md
+              echo "## Initial Release" > release-body.md
+              echo "" >> release-body.md
+              echo "First release of PGTransfer - PostgreSQL data transfer tool with SSH tunnel support." >> release-body.md
             fi
           fi
-          
-          echo "" >> changelog.md
-          echo "## Downloads" >> changelog.md
-          echo "" >> changelog.md
-          echo "Choose the appropriate binary for your platform:" >> changelog.md
-          echo "" >> changelog.md
-          echo "- **Linux (x64)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz\`" >> changelog.md
-          echo "- **Linux (ARM64)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz\`" >> changelog.md
-          echo "- **macOS (Intel)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz\`" >> changelog.md
-          echo "- **macOS (Apple Silicon)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz\`" >> changelog.md
+
+          echo "" >> release-body.md
+          echo "## Downloads" >> release-body.md
+          echo "" >> release-body.md
+          echo "Choose the appropriate binary for your platform:" >> release-body.md
+          echo "" >> release-body.md
+          echo "- **Linux (x64)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz\`" >> release-body.md
+          echo "- **Linux (ARM64)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz\`" >> release-body.md
+          echo "- **macOS (Intel)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz\`" >> release-body.md
+          echo "- **macOS (Apple Silicon)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz\`" >> release-body.md
+          echo "" >> release-body.md
+          echo "Verify downloads against the attached \`SHA256SUMS\`." >> release-body.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: Release ${{ steps.version.outputs.VERSION }}
-          body_path: changelog.md
-          draft: false
+          body_path: release-body.md
+          draft: true
           prerelease: false
           files: |
-            artifacts/**/*
+            artifacts/**/*.tar.gz
+            artifacts/SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
