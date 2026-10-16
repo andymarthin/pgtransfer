@@ -1,0 +1,129 @@
+name: Update formula
+
+# Keeps Formula/pgtransfer.rb in sync with the latest pgtransfer release.
+#
+# On each release (or a manual dispatch) this workflow downloads the published
+# SHA256SUMS, rewrites the formula's version and per-platform sha256 values, and
+# commits the result back to this tap. Scripts are deliberately inlined so the
+# tap has no external tooling dependency.
+
+on:
+  repository_dispatch:
+    types: [pgtransfer-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to sync (e.g. v1.1.0). Defaults to the latest release."
+        required: false
+        type: string
+  schedule:
+    # Daily safety net in case a repository_dispatch is missed.
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve target version
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.version || '' }}" ]; then
+            version="${{ github.event.inputs.version }}"
+          elif [ -n "${{ github.event.client_payload.version || '' }}" ]; then
+            version="${{ github.event.client_payload.version }}"
+          else
+            version="$(gh release view --repo andymarthin/pgtransfer --json tagName -q .tagName)"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Syncing formula to ${version}"
+
+      - name: Download checksums
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o SHA256SUMS \
+            "https://github.com/andymarthin/pgtransfer/releases/download/${VERSION}/SHA256SUMS"
+          cat SHA256SUMS
+
+      - name: Rewrite formula
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          FORMULA: Formula/pgtransfer.rb
+        run: |
+          set -euo pipefail
+
+          sha() {  # sha <asset-suffix>
+            grep "pgtransfer-${VERSION}-$1.tar.gz$" SHA256SUMS | awk '{print $1}'
+          }
+          check() { # check <name> <value>
+            [ -n "$2" ] || { echo "missing checksum for $1" >&2; exit 1; }
+          }
+
+          darwin_arm="$(sha darwin-arm64)";   check darwin-arm64 "$darwin_arm"
+          darwin_intel="$(sha darwin-amd64)"; check darwin-amd64 "$darwin_intel"
+          linux_arm="$(sha linux-arm64)";     check linux-arm64 "$linux_arm"
+          linux_intel="$(sha linux-amd64)";   check linux-amd64 "$linux_intel"
+
+          # Rewrite the version inside every url, then each sha256 (in file
+          # order: darwin-arm64, darwin-amd64, linux-arm64, linux-amd64).
+          # The version is parsed from the url, so there is no `version` line.
+          python3 - "$FORMULA" "$VERSION" "$darwin_arm" "$darwin_intel" "$linux_arm" "$linux_intel" <<'PY'
+          import re, sys
+          path, version, *sums = sys.argv[1:]
+          text = open(path).read()
+
+          # Point every release url at the new tag. The platform suffix
+          # (darwin-arm64, linux-amd64, ...) must be preserved, so the old
+          # version token is matched non-greedily but anchored to the known
+          # suffix shape rather than swallowing the platform.
+          text, n_urls = re.subn(
+              r"/download/v[^/]+/pgtransfer-v[^/]+?-(darwin|linux)-(arm64|amd64)\.tar\.gz",
+              rf"/download/{version}/pgtransfer-{version}-\1-\2.tar.gz",
+              text,
+          )
+
+          # Replace each sha256 in order.
+          out, i = [], 0
+          for line in text.splitlines(keepends=True):
+              if re.match(r'\s*sha256 "', line):
+                  line = re.sub(r'sha256 "[^"]*"', f'sha256 "{sums[i]}"', line)
+                  i += 1
+              out.append(line)
+          text = "".join(out)
+
+          assert n_urls == 4, f"expected 4 release urls, rewrote {n_urls}"
+          assert i == len(sums), f"expected {len(sums)} sha256 lines, found {i}"
+          open(path, "w").write(text)
+          print(f"rewrote {n_urls} urls and {i} checksums for {version}")
+          PY
+
+          # Sanity: the new version and every checksum must now be present.
+          grep -q "pgtransfer-${VERSION}-darwin-arm64.tar.gz" "$FORMULA"
+          for s in "$darwin_arm" "$darwin_intel" "$linux_arm" "$linux_intel"; do
+            grep -q "$s" "$FORMULA"
+          done
+          cat "$FORMULA"
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "Formula already up to date for ${VERSION}."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/pgtransfer.rb
+          git commit -m "pgtransfer ${VERSION}"
+          git push

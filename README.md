@@ -261,7 +261,28 @@ curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/$V/SHA2
 shasum -a 256 -c SHA256SUMS --ignore-missing   # Linux: sha256sum -c ...
 ```
 
-#### Option B — build from source
+#### Option B — Homebrew (macOS and Linux)
+
+Requires [Homebrew](https://brew.sh). Installs the prebuilt binary for your platform.
+
+```bash
+brew tap andymarthin/pgtransfer
+brew install pgtransfer
+```
+
+Or in a single command:
+
+```bash
+brew install andymarthin/pgtransfer/pgtransfer
+```
+
+Upgrade later with:
+
+```bash
+brew update && brew upgrade pgtransfer
+```
+
+#### Option C — build from source
 
 Requires **Go 1.25 or higher**.
 
@@ -273,7 +294,7 @@ go build -o pgtransfer .
 sudo mv pgtransfer /usr/local/bin/     # or: export PATH="$PATH:$PWD"
 ```
 
-#### Option C — `go install`
+#### Option D — `go install`
 
 Requires **Go 1.25 or higher**. Installs into `$(go env GOPATH)/bin`, which must
 be on your `PATH`.
