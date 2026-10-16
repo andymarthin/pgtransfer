@@ -1,7 +1,7 @@
 
 # PGTransfer
 
-[![Go Version](https://img.shields.io/badge/Go-1.21+-blue.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.24+-blue.svg)](https://golang.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-blue.svg)](https://postgresql.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -116,7 +116,7 @@ psql -h localhost -p 5433 -U username -d database
 
 ### Prerequisites
 
-- **Go**: Version 1.21 or higher
+- **Go**: Version 1.24 or higher
 - **PostgreSQL**: Version 13 or higher (client tools: `pg_dump`, `pg_restore`, `psql`)
 - **SSH Client**: For SSH tunnel connections (OpenSSH recommended)
 
@@ -395,11 +395,38 @@ Import with custom batch size and overwrite existing data:
 pgtransfer import csv myprofile public.users users_import.csv --headers --batch-size 1000 --overwrite
 ```
 
-Import from SQL dump file (automatically detects format):
+Import a header-less CSV (columns are mapped positionally using the target table definition):
+
+```bash
+pgtransfer import csv myprofile public.users users_no_header.csv
+```
+
+> **Headers behaviour:** when `--headers` is supplied the first CSV row is treated
+> as the column name list; when omitted, **every** row is treated as data and the
+> columns are matched positionally against the target table.
+
+Import from SQL dump file (automatically detects plain SQL vs. binary pg_dump formats):
 
 ```bash
 pgtransfer import dump myprofile backup.sql
 ```
+
+Import a custom-format dump and drop existing objects first:
+
+```bash
+pgtransfer import dump myprofile backup.dump --clean
+```
+
+Import with a timeout and strict error handling:
+
+```bash
+pgtransfer import dump myprofile backup.sql --timeout 300 --strict
+```
+
+> **Version-skew tolerance:** by default, restore tolerates benign errors caused by
+> client/server version differences (for example an `unrecognized configuration
+> parameter` emitted by a newer `pg_dump`). Pass `--strict` to abort on the first
+> error instead.
 
 ### Database Migration
 
@@ -913,59 +940,57 @@ staticcheck ./...
 
 ### Local Testing with Docker
 
-**Quick PostgreSQL Setup:**
+The repository ships a complete local testing stack under [`scripts/`](scripts/)
+(PostgreSQL with seeded schemas + sample data, an SSH server for tunnel testing,
+and sample CSV fixtures).
+
+**Start the full stack:**
 
 ```bash
-# Start PostgreSQL container
-docker run --name pgtransfer-test \
-  -e POSTGRES_USER=testuser \
-  -e POSTGRES_PASSWORD=testpass \
-  -e POSTGRES_DB=testdb \
-  -p 5432:5432 \
-  -d postgres:15
-
-# Create test profile
-./pgtransfer profile add test-local
-# Use: localhost:5432, testuser, testpass, testdb
+cd scripts
+docker compose up -d
+docker compose ps
 ```
 
-**Docker Compose for Development:**
+This brings up:
 
-```yaml
-version: "3.8"
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: testuser
-      POSTGRES_PASSWORD: testpass
-      POSTGRES_DB: testdb
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/test_data.sql:/docker-entrypoint-initdb.d/init.sql
+| Service | Host endpoint | Credentials |
+|---------|---------------|-------------|
+| PostgreSQL | `localhost:5433` (host) → `5432` (container) | `testuser` / `testpass`, db `testdb` |
+| SSH server (tunnels) | `localhost:2222` | `sshuser` / `sshpass` |
 
-volumes:
-  postgres_data:
-```
+> **Note:** the database is published on host port **5433** to avoid clashing with
+> a locally installed PostgreSQL. Inside the Docker network the database is
+> reachable at the service name `postgres:5432`.
 
-### Testing SSH Tunnels
-
-**SSH Server Setup (for testing):**
+**Create a test profile and verify:**
 
 ```bash
-# Using Docker SSH server for testing
-docker run -d --name ssh-server \
-  -p 2222:22 \
-  -e SSH_ENABLE_PASSWORD_AUTH=true \
-  -e SSH_USERS="testuser:testpass:1000:1000" \
-  panubo/sshd
+./pgtransfer profile add test-docker \
+  --host localhost --port 5433 \
+  --user testuser --password testpass \
+  --database testdb
+./pgtransfer test-connection --profile test-docker
+```
 
-# Test SSH tunnel profile
-./pgtransfer profile add ssh-test
-# SSH: localhost:2222, testuser, testpass
-# DB: host.docker.internal:5432 (from SSH container perspective)
+**Test an SSH tunnel** (Postgres is reached via the SSH server's view of the
+network, so the database host is the compose service name `postgres`):
+
+```bash
+./pgtransfer profile add ssh-test \
+  --host postgres --port 5432 \
+  --user testuser --password testpass \
+  --database testdb \
+  --ssh-host localhost --ssh-user sshuser --ssh-password sshpass --ssh-port 2222
+./pgtransfer test-connection --profile ssh-test
+```
+
+**Tear down:**
+
+```bash
+cd scripts
+docker compose down          # keep data
+docker compose down -v       # remove volumes too
 ```
 
 ### Code Quality
@@ -1006,6 +1031,19 @@ go build -o pgtransfer . && go test ./...
 - **🔍 Connection Auditing**: Detailed logging of connection attempts and operations
 - **🛡️ Network Isolation**: Database access only through encrypted tunnels
 - **📋 Security Standards**: Supports common enterprise security requirements
+
+### Known Limitations
+
+- **SSH host key verification**: SSH connections currently accept any host key
+  (`InsecureIgnoreHostKey`) to keep the initial setup friction low. For hardened
+  environments, pin the expected host key or use `known_hosts` verification
+  before relying on tunnels for production credentials.
+- **Restore error tolerance**: `import dump` tolerates benign client/server
+  version-skew errors by default. Use `--strict` when you need a restore to fail
+  on the first error.
+- **`--overwrite` semantics**: for database migration, overwrite relies on
+  `pg_restore --clean --if-exists` for binary dumps; plain SQL dumps rely on the
+  DROP statements emitted by `pg_dump`.
 
 ## 🤝 Contributing
 

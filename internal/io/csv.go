@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"encoding/csv"
 	"fmt"
+	goio "io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,13 +17,15 @@ import (
 
 // CSVOptions contains configuration for CSV operations
 type CSVOptions struct {
-	BatchSize int // Number of rows to process in each batch (default: 500)
+	BatchSize int  // Number of rows to process in each batch (default: 500)
+	HasHeader bool // Whether the first row of the CSV contains column headers
 }
 
 // DefaultCSVOptions returns default CSV configuration
 func DefaultCSVOptions() *CSVOptions {
 	return &CSVOptions{
 		BatchSize: 500,
+		HasHeader: true,
 	}
 }
 
@@ -190,7 +193,6 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 	if !strings.HasSuffix(exportPath, ".csv") {
 		exportPath += ".csv"
 	}
-
 	if err := os.MkdirAll(filepath.Dir(exportPath), 0755); err != nil {
 		return fmt.Errorf("failed to create export directory: %w", err)
 	}
@@ -227,9 +229,11 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 	}
 	rows.Close()
 
-	// Write CSV header
-	if err := writer.Write(cols); err != nil {
-		return fmt.Errorf("failed to write CSV header: %w", err)
+	// Write CSV header (unless explicitly disabled).
+	if options.HasHeader {
+		if err := writer.Write(cols); err != nil {
+			return fmt.Errorf("failed to write CSV header: %w", err)
+		}
 	}
 
 	bar := NewProgressBarWithTimer(total, fmt.Sprintf("Exporting %s", table))
@@ -389,10 +393,15 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 
 	reader := csv.NewReader(file)
 
-	// Read header
-	headers, err := reader.Read()
-	if err != nil {
-		return fmt.Errorf("failed to read CSV header: %w", err)
+	// Determine whether the first row holds column headers.
+	hasHeader := options == nil || options.HasHeader
+
+	var headers []string
+	if hasHeader {
+		headers, err = reader.Read()
+		if err != nil {
+			return fmt.Errorf("failed to read CSV header: %w", err)
+		}
 	}
 
 	// Count total rows for progress tracking
@@ -407,9 +416,24 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 		return fmt.Errorf("failed to count CSV rows: %w", err)
 	}
 
-	totalRows := int64(len(records) - 1) // Exclude header
+	totalRows := int64(len(records))
+	if hasHeader {
+		totalRows-- // Exclude header
+	}
 	if totalRows <= 0 {
 		return fmt.Errorf("no data rows found in %s", importPath)
+	}
+
+	// When no header row exists we need the target column names. Without them
+	// we fall back to positional inserts by reading them from the table.
+	if !hasHeader {
+		headers, err = tableColumns(db, table)
+		if err != nil {
+			return err
+		}
+		if len(headers) == 0 {
+			return fmt.Errorf("could not determine columns for table '%s'", table)
+		}
 	}
 
 	bar := NewProgressBarWithTimer(totalRows, fmt.Sprintf("Importing %s", table))
@@ -432,16 +456,16 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	// Process CSV in batches
 	for {
 		record, err := reader.Read()
-		if err != nil {
-			if err.Error() == "EOF" {
-				// Process final batch if any
-				if len(batch) > 0 {
-					if err := processBatch(db, insertSQL, batch, &imported, bar); err != nil {
-						return err
-					}
+		if err == goio.EOF {
+			// Process final batch if any
+			if len(batch) > 0 {
+				if err := processBatch(db, insertSQL, batch, &imported, bar); err != nil {
+					return err
 				}
-				break
 			}
+			break
+		}
+		if err != nil {
 			return fmt.Errorf("failed to read CSV row: %w", err)
 		}
 
@@ -460,6 +484,23 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	utils.PrintSuccess(nil, "✅ Imported %d rows from %s (batch size: %d)", imported, importPath, options.BatchSize)
 	utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
 	return nil
+}
+
+// tableColumns returns the ordered column names for the given table by asking
+// PostgreSQL for the column list. Used when importing header-less CSV files.
+func tableColumns(db *sql.DB, table string) ([]string, error) {
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT 0", table)
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine columns for '%s': %w", table, err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read columns for '%s': %w", table, err)
+	}
+	return cols, nil
 }
 
 // processBatch handles the insertion of a batch of records

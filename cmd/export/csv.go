@@ -119,25 +119,20 @@ func runCSVExport(cmd *cobra.Command, args []string) error {
 	}
 	defer dbConn.Close()
 
-	// Create CSV options with batch size
+	// Create CSV options with batch size and header behaviour
 	options := &io.CSVOptions{
 		BatchSize: csvBatchSize,
+		HasHeader: csvHeaders,
 	}
 
 	if csvQuery != "" {
 		// Export using custom query
 		fmt.Printf("ℹ️  Executing custom query...\n")
 		return exportCSVWithQuery(dbConn.DB, csvQuery, outputFile, csvHeaders)
-	} else {
-		// Export using table name with batch processing
-		if csvBatchSize == 500 {
-			// Use default function for backward compatibility when using default batch size
-			return io.ExportCSV(dbConn.DB, tableName, outputFile)
-		} else {
-			// Use batch-enabled function when custom batch size is specified
-			return io.ExportCSVWithOptions(dbConn.DB, tableName, outputFile, options)
-		}
 	}
+
+	// Export using table name with batch processing (honours headers flag)
+	return io.ExportCSVWithOptions(dbConn.DB, tableName, outputFile, options)
 }
 
 func exportCSVWithQuery(db *sql.DB, query, outputFile string, includeHeaders bool) error {

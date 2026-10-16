@@ -1,14 +1,10 @@
 package utils
 
-import (
-	"fmt"
-	"os"
-)
+import "github.com/andymarthin/pgtransfer/internal/sshx"
 
+// ReadPrivateKey reads an SSH private key file from disk.
+//
+// Deprecated: use sshx.ReadPrivateKey directly.
 func ReadPrivateKey(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read SSH private key: %w", err)
-	}
-	return data, nil
+	return sshx.ReadPrivateKey(path)
 }

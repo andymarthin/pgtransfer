@@ -1,18 +1,15 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/andymarthin/pgtransfer/cmd"
 )
 
 func main() {
-	// Handle version flag
+	// Handle version flag (mirrors the `version` subcommand output).
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Printf("pgtransfer %s\n", cmd.Version)
-		fmt.Printf("Commit: %s\n", cmd.Commit)
-		fmt.Printf("Built: %s\n", cmd.Date)
+		cmd.PrintVersion()
 		os.Exit(0)
 	}
 

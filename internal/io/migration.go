@@ -296,7 +296,7 @@ func performMigration(opts *MigrationOptions) error {
 	dumpOpts := &DumpOptions{
 		SchemaOnly: opts.SchemaOnly,
 		DataOnly:   opts.DataOnly,
-		Tables:     convertTableSlice(opts.Tables),
+		Tables:     opts.Tables,
 		Verbose:    opts.Verbose,
 		Timeout:    opts.Timeout,
 	}
@@ -321,14 +321,11 @@ func performMigration(opts *MigrationOptions) error {
 		importDescription = fmt.Sprintf("Importing tables (%s) to target database", strings.Join(opts.Tables, ", "))
 	}
 
-	// Check if we need to handle existing data
-	if !opts.Overwrite && !opts.DataOnly {
-		// For schema migration without overwrite, we might need special handling
-		// This is a simplified approach - in production, you'd want more sophisticated conflict resolution
-	}
-
 	importBar := NewProgressBarWithTimer(0, importDescription)
-	if err := RestoreDatabaseSmart(targetURL, tempDumpFile); err != nil {
+	// Honour the overwrite flag by asking pg_restore to drop existing
+	// objects (--clean --if-exists) before recreating them.
+	restoreOpts := &RestoreOptions{Clean: opts.Overwrite}
+	if err := RestoreDatabaseSmartWithOptions(targetURL, tempDumpFile, restoreOpts); err != nil {
 		importBar.Finish()
 		return fmt.Errorf("failed to import to target database: %w", err)
 	}
@@ -366,7 +363,7 @@ func performMigrationWithConnection(opts *MigrationOptions) error {
 	dumpOpts := &DumpOptions{
 		SchemaOnly: opts.SchemaOnly,
 		DataOnly:   opts.DataOnly,
-		Tables:     convertTableSlice(opts.Tables),
+		Tables:     opts.Tables,
 		Verbose:    opts.Verbose,
 		Timeout:    opts.Timeout,
 	}
@@ -391,14 +388,10 @@ func performMigrationWithConnection(opts *MigrationOptions) error {
 		importDescription = fmt.Sprintf("Importing tables (%s) to target database", strings.Join(opts.Tables, ", "))
 	}
 
-	// Check if we need to handle existing data
-	if !opts.Overwrite && !opts.DataOnly {
-		// For schema migration without overwrite, we might need special handling
-		// This is a simplified approach - in production, you'd want more sophisticated conflict resolution
-	}
-
 	importBar := NewProgressBarWithTimer(0, importDescription)
-	if err := RestoreDatabaseWithConnection(opts.TargetProfile, tempDumpFile); err != nil {
+	// Honour the overwrite flag for connection-aware restores as well.
+	restoreOpts := &RestoreOptions{Clean: opts.Overwrite}
+	if err := RestoreDatabaseWithConnectionAndOptions(opts.TargetProfile, tempDumpFile, restoreOpts); err != nil {
 		importBar.Finish()
 		return fmt.Errorf("failed to import to target database: %w", err)
 	}
@@ -418,23 +411,22 @@ func performRollbackWithConnection(opts *MigrationOptions, rollbackFile string) 
 	return RestoreDatabaseWithConnection(opts.TargetProfile, rollbackFile)
 }
 
-// convertTableSlice converts []string to []string (helper function for compatibility)
-func convertTableSlice(tables []string) []string {
-	return tables
-}
-
-// testConnection tests database connectivity using existing connection utilities
+// testConnection validates database connectivity using the shared db package.
 func testConnection(dbURL string) error {
 	if dbURL == "" {
 		return fmt.Errorf("empty database URL")
 	}
 
-	// Use the existing connection testing from the db package
-	// For now, we'll do basic URL validation
-	if !strings.Contains(dbURL, "postgres://") && !strings.Contains(dbURL, "postgresql://") {
+	// Validate the URL shape before attempting a real connection.
+	if !strings.HasPrefix(dbURL, "postgres://") && !strings.HasPrefix(dbURL, "postgresql://") {
 		return fmt.Errorf("invalid PostgreSQL connection URL")
 	}
 
+	conn, err := db.Connect(config.Profile{DBURL: dbURL})
+	if err != nil {
+		return err
+	}
+	conn.Close()
 	return nil
 }
 
