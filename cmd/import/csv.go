@@ -8,6 +8,7 @@ import (
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/db"
 	"github.com/andymarthin/pgtransfer/internal/io"
+	"github.com/andymarthin/pgtransfer/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -85,20 +86,30 @@ func runCSVImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("profile '%s' not found", profileName)
 	}
 
-	fmt.Printf("ℹ️  Connecting to database using profile '%s'...\n", profileName)
+	if !output.IsJSON() {
+		fmt.Printf("ℹ️  Connecting to database using profile '%s'...\n", profileName)
+	}
 
 	// Connect to database
 	dbConn, err := db.Connect(profile)
 	if err != nil {
+		if output.IsJSON() {
+			return output.Fail("import csv", "connection_failed", "failed to connect to database: %v", err)
+		}
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 	defer dbConn.Close()
 
 	// Handle overwrite option
 	if csvOverwrite {
-		fmt.Printf("⚠️  Truncating table '%s'...\n", tableName)
+		if !output.IsJSON() {
+			fmt.Printf("⚠️  Truncating table '%s'...\n", tableName)
+		}
 		truncateSQL := fmt.Sprintf("TRUNCATE TABLE %s", tableName)
 		if _, err := dbConn.DB.Exec(truncateSQL); err != nil {
+			if output.IsJSON() {
+				return output.Fail("import csv", "truncate_failed", "failed to truncate table %q: %v", tableName, err)
+			}
 			return fmt.Errorf("failed to truncate table: %w", err)
 		}
 	}
@@ -110,7 +121,23 @@ func runCSVImport(cmd *cobra.Command, args []string) error {
 	}
 
 	// Import using batch processing (options carry batch size + header flag)
-	return io.ImportCSVWithOptions(dbConn.DB, tableName, inputFile, options)
+	if err := io.ImportCSVWithOptions(dbConn.DB, tableName, inputFile, options); err != nil {
+		if output.IsJSON() {
+			return output.Fail("import csv", "import_failed", "%v", err)
+		}
+		return err
+	}
+
+	if output.IsJSON() {
+		output.Success("import csv", map[string]interface{}{
+			"profile":    profileName,
+			"table":      tableName,
+			"input_file": inputFile,
+			"truncated":  csvOverwrite,
+			"headers":    csvHeaders,
+		})
+	}
+	return nil
 }
 
 func init() {

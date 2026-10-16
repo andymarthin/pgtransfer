@@ -6,6 +6,7 @@ import (
 
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/io"
+	"github.com/andymarthin/pgtransfer/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -72,13 +73,16 @@ func runDumpExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("profile '%s' not found", profileName)
 	}
 
-	fmt.Printf("ℹ️  Creating database dump using profile '%s'...\n", profileName)
+	if !output.IsJSON() {
+		fmt.Printf("ℹ️  Creating database dump using profile '%s'...\n", profileName)
+	}
 
 	// Check if any advanced options are used
 	hasAdvancedOptions := dumpFormat != "" || dumpCompress || dumpSchemaOnly || dumpDataOnly ||
 		len(dumpTables) > 0 || len(dumpExcludeTables) > 0 || dumpSchema != "" ||
 		dumpVerbose || dumpTimeout > 0
 
+	var dumpErr error
 	if hasAdvancedOptions {
 		// Use advanced dump function with connection support (SSH/direct)
 		options := &io.DumpOptions{
@@ -92,11 +96,29 @@ func runDumpExport(cmd *cobra.Command, args []string) error {
 			Verbose:       dumpVerbose,
 			Timeout:       dumpTimeout,
 		}
-		return io.DumpDatabaseWithConnectionAndOptions(profile, outputFile, options)
+		dumpErr = io.DumpDatabaseWithConnectionAndOptions(profile, outputFile, options)
 	} else {
 		// Use simple dump function with connection support (SSH/direct)
-		return io.DumpDatabaseWithConnection(profile, outputFile)
+		dumpErr = io.DumpDatabaseWithConnection(profile, outputFile)
 	}
+	if dumpErr != nil {
+		return emitOrReturn(dumpErr, "export dump")
+	}
+
+	if output.IsJSON() {
+		info := map[string]interface{}{
+			"profile":     profileName,
+			"output_file": outputFile,
+		}
+		if fi, err := os.Stat(outputFile); err == nil {
+			info["bytes"] = fi.Size()
+		}
+		if dumpFormat != "" {
+			info["format"] = dumpFormat
+		}
+		output.Success("export dump", info)
+	}
+	return nil
 }
 
 func init() {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/io"
+	"github.com/andymarthin/pgtransfer/internal/output"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -67,7 +68,9 @@ func runDumpImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("profile '%s' not found", profileName)
 	}
 
-	utils.PrintInfo(cmd, "Importing database dump using profile '%s'...", profileName)
+	if !output.IsJSON() {
+		utils.PrintInfo(cmd, "Importing database dump using profile '%s'...", profileName)
+	}
 
 	// Use connection-aware restore function that supports SSH tunnels.
 	options := &io.RestoreOptions{
@@ -75,7 +78,22 @@ func runDumpImport(cmd *cobra.Command, args []string) error {
 		Timeout: dumpImportTimeout,
 		Strict:  dumpImportStrict,
 	}
-	return io.RestoreDatabaseWithConnectionAndOptions(profile, inputFile, options)
+	if err := io.RestoreDatabaseWithConnectionAndOptions(profile, inputFile, options); err != nil {
+		if output.IsJSON() {
+			return output.Fail("import dump", "restore_failed", "%v", err)
+		}
+		return err
+	}
+
+	if output.IsJSON() {
+		output.Success("import dump", map[string]interface{}{
+			"profile":    profileName,
+			"input_file": inputFile,
+			"clean":      dumpImportClean,
+			"strict":     dumpImportStrict,
+		})
+	}
+	return nil
 }
 
 func init() {

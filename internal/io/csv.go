@@ -1,6 +1,7 @@
 package io
 
 import (
+	"bufio"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/csv"
@@ -535,4 +536,84 @@ func processBatch(db *sql.DB, insertSQL string, batch [][]string, imported *int6
 	}
 
 	return nil
+}
+
+// ExportCSVWithQuery runs an arbitrary SELECT and writes the results to a CSV
+// file. It returns the number of data rows written (headers excluded).
+func ExportCSVWithQuery(db *sql.DB, query, exportPath string, includeHeaders bool) (int, error) {
+	file, err := os.Create(exportPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer file.Close()
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute query: %w", err)
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get column names: %w", err)
+	}
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	if includeHeaders {
+		if err := writer.Write(columns); err != nil {
+			return 0, fmt.Errorf("failed to write headers: %w", err)
+		}
+	}
+
+	values := make([]interface{}, len(columns))
+	valuePtrs := make([]interface{}, len(columns))
+	for i := range values {
+		valuePtrs[i] = &values[i]
+	}
+
+	count := 0
+	for rows.Next() {
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return count, fmt.Errorf("failed to scan row: %w", err)
+		}
+		record := make([]string, len(values))
+		for i, v := range values {
+			record[i] = FormatCSVValue(v)
+		}
+		if err := writer.Write(record); err != nil {
+			return count, fmt.Errorf("failed to write row: %w", err)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return count, fmt.Errorf("error iterating query results: %w", err)
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return count, fmt.Errorf("failed to flush CSV: %w", err)
+	}
+	return count, nil
+}
+
+// CountCSVDataRows best-effort counts data rows in a CSV file, optionally
+// excluding the header row.
+func CountCSVDataRows(path string, hasHeader bool) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	n := 0
+	for sc.Scan() {
+		n++
+	}
+	if hasHeader && n > 0 {
+		n--
+	}
+	return n
 }

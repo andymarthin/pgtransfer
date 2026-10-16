@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"runtime"
 
+	"github.com/andymarthin/pgtransfer/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -17,8 +19,24 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version information",
 	Run: func(cmd *cobra.Command, args []string) {
+		if output.IsJSON() {
+			output.Success("version", versionInfo())
+			return
+		}
 		PrintVersion()
 	},
+}
+
+// versionInfo is the machine-readable form of the version output.
+func versionInfo() map[string]interface{} {
+	return map[string]interface{}{
+		"version": Version,
+		"commit":  Commit,
+		"date":    Date,
+		"go":      runtime.Version(),
+		"os":      runtime.GOOS,
+		"arch":    runtime.GOARCH,
+	}
 }
 
 // PrintVersion writes the version, commit and build date to stdout. It is

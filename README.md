@@ -1,7 +1,7 @@
 
 # PGTransfer
 
-[![Go Version](https://img.shields.io/badge/Go-1.24+-blue.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-blue.svg)](https://golang.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-blue.svg)](https://postgresql.org)
 [![CI](https://github.com/andymarthin/pgtransfer/actions/workflows/ci.yml/badge.svg)](https://github.com/andymarthin/pgtransfer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -15,6 +15,7 @@
 - **🛡️ Robust Security**: SSL/TLS encryption, SSH key authentication, and secure local credential storage
 - **🔄 Database Migration**: Complete schema and data migration between databases with automatic rollback capabilities
 - **📊 Intelligent Data Processing**: Proper handling of PostgreSQL data types with smart CSV formatting and conversion
+- **🤖 AI & Automation Ready**: Machine-readable `--json` output for every command and a built-in Model Context Protocol (MCP) server so agents can drive transfers directly
 
 ## ✨ Features
 
@@ -30,6 +31,113 @@
 - **🔑 Authentication**: Support for password, SSH key, and SSH agent authentication
 - **👤 Profile Management**: Reusable connection profiles with secure credential storage
 - **🖥️ Interactive Setup**: User-friendly interactive profile configuration with validation
+
+### Automation & AI
+- **🤖 JSON Output**: A global `--json` flag (or `PGTRANSFER_JSON=1`) emits a single, stable JSON envelope for every command
+- **🔌 MCP Server**: `pgtransfer mcp` runs a Model Context Protocol server over stdio, exposing transfers as typed tools for AI hosts
+- **🔒 Secret Redaction**: JSON output never includes passwords — profiles report `has_password` instead
+
+## 🤖 AI & Automation
+
+PGTransfer is designed to be driven by scripts, CI pipelines, and AI agents.
+
+### Machine-readable JSON output
+
+Pass the global `--json` flag (before the subcommand) to any command to receive a
+single JSON object on stdout instead of human-friendly text:
+
+```bash
+pgtransfer --json version
+pgtransfer --json profile list
+pgtransfer --json test-connection myprofile
+pgtransfer --json export csv myprofile out.csv --table users --headers
+```
+
+The flag can also be enabled with an environment variable, which is convenient for
+agents that cannot easily change the command line:
+
+```bash
+export PGTRANSFER_JSON=1
+pgtransfer version        # emits JSON
+```
+
+**The envelope** is identical for every command:
+
+```json
+{
+  "ok": true,
+  "command": "export csv",
+  "data": { "rows": 250, "output_file": "out.csv" },
+  "error": null
+}
+```
+
+On failure `ok` is `false`, `data` is omitted, and `error` carries a stable
+machine-readable code:
+
+```json
+{
+  "ok": false,
+  "command": "test-connection",
+  "error": {
+    "code": "profile_not_found",
+    "message": "profile \"ghost\" not found"
+  }
+}
+```
+
+The process always exits non-zero on failure, and **exactly one** JSON object is
+written per invocation — including for parser-level problems such as an unknown
+subcommand or a bad flag (`code: "usage_error"`).
+
+Stable error codes include: `usage_error`, `profile_not_found`,
+`no_active_profile`, `config_load_failed`, `connection_failed`, `export_failed`,
+`import_failed`, `dump_failed`, `restore_failed`, `migration_failed`,
+`rollback_failed`, `file_exists`, `file_not_found`, `truncate_failed`,
+`invalid_input`.
+
+### MCP server (AI agent integration)
+
+`pgtransfer mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io)
+server over stdio. AI hosts (Claude Desktop, Cursor, custom agent runtimes) can
+then call pgtransfer capabilities as native typed tools.
+
+```bash
+pgtransfer mcp
+```
+
+Register it with an MCP host — for Claude Desktop, add this to
+`claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "pgtransfer": {
+      "command": "pgtransfer",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Exposed tools**
+
+| Tool | Purpose |
+| --- | --- |
+| `list_profiles` | List saved profiles (never returns passwords) |
+| `test_connection` | Test connectivity, optionally through an SSH tunnel |
+| `export_csv` | Export a table or a custom query to CSV |
+| `import_csv` | Import a CSV into a table, optionally truncating first |
+| `export_dump` | Create a `pg_dump` backup (plain/custom/tar/directory) |
+| `import_dump` | Restore a dump, tolerating benign version skew by default |
+| `migrate_database` | Migrate schema/data between databases or profiles |
+
+Tool failures are reported in-band with `isError: true` and a structured
+`{"ok": false, "error": {"code", "message"}}` payload, so a model can read the
+problem and correct itself rather than seeing an opaque protocol error.
+
+Because stdout carries the MCP protocol, the server redirects any incidental
+library output to stderr; only protocol frames are ever written to stdout.
 
 ## 🔐 SSH Tunnel Support
 
@@ -117,7 +225,7 @@ psql -h localhost -p 5433 -U username -d database
 
 ### Prerequisites
 
-- **Go**: Version 1.24 or higher
+- **Go**: Version 1.25 or higher
 - **PostgreSQL**: Version 13 or higher (client tools: `pg_dump`, `pg_restore`, `psql`)
 - **SSH Client**: For SSH tunnel connections (OpenSSH recommended)
 
@@ -175,7 +283,13 @@ pgtransfer migrate <source> <target> [--mode schema|data|full] [--tables table1,
 
 # Migration Rollback
 pgtransfer migrate rollback <profile> --backup-file <backup.sql>
+
+# AI Agent Integration (Model Context Protocol server over stdio)
+pgtransfer mcp
 ```
+
+> **Tip:** every command above also accepts the global `--json` flag for
+> machine-readable output. See [AI & Automation](#-ai--automation).
 
 ### Quick Examples
 

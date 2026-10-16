@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/db"
+	"github.com/andymarthin/pgtransfer/internal/output"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -105,9 +107,26 @@ Examples:
 		}
 
 		// Test the connection
+		start := time.Now()
 		if err := db.TestConnection(profile); err != nil {
+			if output.IsJSON() {
+				return output.Fail("test-connection", "connection_failed",
+					"connection test failed for profile %q: %v", profile.Name, err)
+			}
 			utils.PrintError(cmd, "Connection test failed: %v", err)
 			return err
+		}
+
+		if output.IsJSON() {
+			output.Success("test-connection", map[string]interface{}{
+				"profile":    profile.Name,
+				"host":       profile.Host,
+				"port":       profile.Port,
+				"database":   profile.Database,
+				"ssh":        profile.SSH.Enabled,
+				"latency_ms": time.Since(start).Milliseconds(),
+			})
+			return nil
 		}
 
 		utils.PrintSuccess(cmd, "Connection test successful!")

@@ -8,6 +8,7 @@ import (
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/io"
 	"github.com/andymarthin/pgtransfer/internal/log"
+	"github.com/andymarthin/pgtransfer/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -197,10 +198,27 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 	err = io.MigrateDatabaseWithConnection(migrationOpts)
 	if err != nil {
 		log.Failure("migrate database", sourceProfileName, err.Error(), start)
+		if output.IsJSON() {
+			return output.Fail("migrate database", "migration_failed", "database migration failed: %v", err)
+		}
 		return fmt.Errorf("database migration failed: %w", err)
 	}
 
 	log.Success("migrate database", sourceProfileName, fmt.Sprintf("Successfully migrated to %s", targetProfileName), start)
+
+	if output.IsJSON() {
+		output.Success("migrate database", map[string]interface{}{
+			"source":           sourceProfileName,
+			"target":           targetProfileName,
+			"schema_only":      migrateSchemaOnly,
+			"data_only":        migrateDataOnly,
+			"tables":           tableList,
+			"rollback_enabled": migrateEnableRollback,
+			"duration_ms":      time.Since(start).Milliseconds(),
+		})
+		return nil
+	}
+
 	fmt.Printf("✅ Database migration completed successfully from '%s' to '%s'\n", sourceProfileName, targetProfileName)
 	return nil
 }
