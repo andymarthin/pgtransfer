@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,31 +46,46 @@ func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 // Tests
 // ---------------------------
 
-func TestConnectDirect_Success(t *testing.T) {
+func TestConnectDirect_UnreachableReturnsError(t *testing.T) {
+	// Point at a closed port so the ping fails; connectDirect must surface an
+	// error and must not leak an open *sql.DB.
 	p := config.Profile{
 		Name:     "direct",
 		User:     "postgres",
 		Password: "secret",
-		Host:     "localhost",
-		Port:     5432,
+		Host:     "127.0.0.1",
+		Port:     1, // almost certainly closed
 		Database: "testdb",
 		SSLMode:  "disable",
 	}
 
-	// This test verifies the DSN building and basic connection setup
-	// without actually connecting to a database
-	dsn := config.BuildDSN(p)
-	if dsn == "" {
-		t.Fatalf("expected non-empty DSN")
+	conn, err := connectDirect(p)
+	if err == nil {
+		if conn != nil {
+			conn.Close()
+		}
+		t.Skip("port 1 unexpectedly reachable; skipping")
 	}
+	if conn != nil {
+		t.Fatalf("expected nil connection on failure, got %+v", conn)
+	}
+}
 
-	// Test that the profile is properly configured
-	if p.Host != "localhost" || p.Port != 5432 {
-		t.Fatalf("profile not configured correctly")
+func TestConnect_ViaSSHRequiresHostAndUser(t *testing.T) {
+	// SSH enabled but missing host/user must fail fast before any dial.
+	p := config.Profile{
+		Name: "ssh-incomplete",
+		SSH:  config.SSHConfig{Enabled: true},
+	}
+	if _, err := Connect(p); err == nil {
+		t.Fatalf("expected error when SSH host/user are missing")
 	}
 }
 
 func TestConnectViaSSH_FailureAuth(t *testing.T) {
+	// Ensure no ssh-agent interferes with the auth-method selection.
+	t.Setenv("SSH_AUTH_SOCK", "")
+
 	p := config.Profile{
 		Name: "ssh-fail",
 		SSH: config.SSHConfig{
@@ -80,9 +96,14 @@ func TestConnectViaSSH_FailureAuth(t *testing.T) {
 		},
 	}
 
+	// With no key and no password, auth setup must fail deterministically
+	// rather than attempting an unauthenticated connection.
 	_, err := connectViaSSH(p)
 	if err == nil {
-		t.Fatalf("expected SSH auth failure, got nil")
+		t.Fatalf("expected SSH auth setup failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "auth") {
+		t.Fatalf("expected an auth-related error, got: %v", err)
 	}
 }
 
