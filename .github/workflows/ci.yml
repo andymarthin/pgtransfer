@@ -1,14 +1,12 @@
 name: CI
 
 on:
+  # Only main is built on push. Topic branches are covered by the pull_request
+  # trigger below, which avoids running every check twice (once for the push to
+  # the topic branch, once for its pull request) — see the note at the bottom.
   push:
     branches:
       - main
-      - 'fix/**'
-      - 'feat/**'
-      - 'feature/**'
-      - 'test/**'
-      - 'chore/**'
   pull_request:
     branches:
       - main
@@ -22,3 +20,10 @@ jobs:
   test:
     name: Verify
     uses: ./.github/workflows/reusable-ci.yml
+
+# Note on triggers: previously this workflow also ran on pushes to fix/**, feat/**,
+# feature/**, test/** and chore/**. That duplicated every run for branches with an
+# open pull request (one run for the push, one for the pull request). Topics are
+# now verified through the pull_request trigger; main is still verified on push
+# after a merge. If you need CI on a branch that has no pull request yet, open a
+# (draft) pull request.
