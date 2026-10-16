@@ -2,6 +2,7 @@ package profile
 
 import (
 	"github.com/andymarthin/pgtransfer/internal/config"
+	"github.com/andymarthin/pgtransfer/internal/output"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -12,11 +13,21 @@ var activeCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
+			if output.IsJSON() {
+				return output.Fail("profile active", "config_load_failed", "failed to load configuration: %v", err)
+			}
 			utils.PrintError(cmd, "Failed to load configuration: %v", err)
 			return err
 		}
 
 		if cfg.ActiveProfile == "" {
+			if output.IsJSON() {
+				output.Success("profile active", map[string]interface{}{
+					"active_profile": "",
+					"profile":        nil,
+				})
+				return nil
+			}
 			utils.PrintWarning(cmd, "No active profile selected.")
 			utils.PrintMuted(cmd, `Use "pgtransfer profile use <name>" to set one.`)
 			return nil
@@ -24,7 +35,19 @@ var activeCmd = &cobra.Command{
 
 		profile, ok := cfg.Profiles[cfg.ActiveProfile]
 		if !ok {
+			if output.IsJSON() {
+				return output.Fail("profile active", "active_profile_missing",
+					"active profile %q not found in config", cfg.ActiveProfile)
+			}
 			utils.PrintError(cmd, "Active profile '%s' not found in config.", cfg.ActiveProfile)
+			return nil
+		}
+
+		if output.IsJSON() {
+			output.Success("profile active", map[string]interface{}{
+				"active_profile": cfg.ActiveProfile,
+				"profile":        viewProfile(cfg.ActiveProfile, profile, true),
+			})
 			return nil
 		}
 

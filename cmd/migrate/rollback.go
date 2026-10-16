@@ -9,6 +9,7 @@ import (
 
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/io"
+	"github.com/andymarthin/pgtransfer/internal/output"
 )
 
 var rollbackCmd = &cobra.Command{
@@ -83,7 +84,18 @@ func runRollback(cmd *cobra.Command, args []string) error {
 
 	// Perform rollback
 	if err := performRollbackOperation(opts, backupFile); err != nil {
+		if output.IsJSON() {
+			return output.Fail("migrate rollback", "rollback_failed", "rollback failed: %v", err)
+		}
 		return fmt.Errorf("rollback failed: %w", err)
+	}
+
+	if output.IsJSON() {
+		output.Success("migrate rollback", map[string]interface{}{
+			"profile":     targetProfile,
+			"backup_file": backupFile,
+		})
+		return nil
 	}
 
 	fmt.Printf("✅ Rollback completed successfully\n")

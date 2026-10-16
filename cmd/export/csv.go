@@ -1,6 +1,7 @@
 package export
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/db"
 	"github.com/andymarthin/pgtransfer/internal/io"
+	"github.com/andymarthin/pgtransfer/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -110,7 +112,9 @@ func runCSVExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("profile '%s' not found", profileName)
 	}
 
-	fmt.Printf("ℹ️  Connecting to database using profile '%s'...\n", profileName)
+	if !output.IsJSON() {
+		fmt.Printf("ℹ️  Connecting to database using profile '%s'...\n", profileName)
+	}
 
 	// Connect to database
 	dbConn, err := db.Connect(profile)
@@ -127,33 +131,89 @@ func runCSVExport(cmd *cobra.Command, args []string) error {
 
 	if csvQuery != "" {
 		// Export using custom query
-		fmt.Printf("ℹ️  Executing custom query...\n")
-		return exportCSVWithQuery(dbConn.DB, csvQuery, outputFile, csvHeaders)
+		if !output.IsJSON() {
+			fmt.Printf("ℹ️  Executing custom query...\n")
+		}
+		n, err := exportCSVWithQuery(dbConn.DB, csvQuery, outputFile, csvHeaders)
+		if err != nil {
+			return emitOrReturn(err, "export csv")
+		}
+		return finishExport("export csv", outputFile, n, profileName)
 	}
 
 	// Export using table name with batch processing (honours headers flag)
-	return io.ExportCSVWithOptions(dbConn.DB, tableName, outputFile, options)
+	if err := io.ExportCSVWithOptions(dbConn.DB, tableName, outputFile, options); err != nil {
+		return emitOrReturn(err, "export csv")
+	}
+
+	rows := countCSVDataRows(outputFile, csvHeaders)
+	return finishExport("export csv", outputFile, rows, profileName)
 }
 
-func exportCSVWithQuery(db *sql.DB, query, outputFile string, includeHeaders bool) error {
+// finishExport emits the machine-readable export result, or returns nil in text
+// mode (where the helper already printed human-friendly output).
+func finishExport(command, outputFile string, rows int, profile string) error {
+	if output.IsJSON() {
+		output.Success(command, map[string]interface{}{
+			"profile":     profile,
+			"output_file": outputFile,
+			"rows":        rows,
+		})
+	}
+	return nil
+}
+
+// countCSVDataRows best-effort counts data rows in a CSV file for reporting.
+func countCSVDataRows(path string, hasHeader bool) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	n := 0
+	for sc.Scan() {
+		n++
+	}
+	if hasHeader && n > 0 {
+		n--
+	}
+	return n
+}
+
+// emitOrReturn converts an error into a structured JSON failure when in JSON
+// mode, otherwise returns it unchanged for the text path.
+func emitOrReturn(err error, command string) error {
+	if err == nil {
+		return nil
+	}
+	if output.IsJSON() {
+		return output.Fail(command, "operation_failed", "%v", err)
+	}
+	return err
+}
+
+func exportCSVWithQuery(db *sql.DB, query, outputFile string, includeHeaders bool) (int, error) {
 	// Create output file
 	file, err := os.Create(outputFile)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return 0, fmt.Errorf("failed to create output file: %w", err)
 	}
 	defer file.Close()
 
 	// Execute query
 	rows, err := db.Query(query)
 	if err != nil {
-		return fmt.Errorf("failed to execute query: %w", err)
+		return 0, fmt.Errorf("failed to execute query: %w", err)
 	}
 	defer rows.Close()
 
 	// Get column names
 	columns, err := rows.Columns()
 	if err != nil {
-		return fmt.Errorf("failed to get column names: %w", err)
+		return 0, fmt.Errorf("failed to get column names: %w", err)
 	}
 
 	writer := csv.NewWriter(file)
@@ -162,7 +222,7 @@ func exportCSVWithQuery(db *sql.DB, query, outputFile string, includeHeaders boo
 	// Write headers if requested
 	if includeHeaders {
 		if err := writer.Write(columns); err != nil {
-			return fmt.Errorf("failed to write headers: %w", err)
+			return 0, fmt.Errorf("failed to write headers: %w", err)
 		}
 	}
 
@@ -179,7 +239,7 @@ func exportCSVWithQuery(db *sql.DB, query, outputFile string, includeHeaders boo
 	// Process rows
 	for rows.Next() {
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return fmt.Errorf("failed to scan row: %w", err)
+			return 0, fmt.Errorf("failed to scan row: %w", err)
 		}
 
 		// Convert values to strings
@@ -189,22 +249,24 @@ func exportCSVWithQuery(db *sql.DB, query, outputFile string, includeHeaders boo
 		}
 
 		if err := writer.Write(record); err != nil {
-			return fmt.Errorf("failed to write row: %w", err)
+			return 0, fmt.Errorf("failed to write row: %w", err)
 		}
 
 		rowCount++
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error during row iteration: %w", err)
+		return 0, fmt.Errorf("error during row iteration: %w", err)
 	}
 
-	duration := time.Since(startTime)
-	fmt.Printf("✅ ✅ Export completed successfully!\n")
-	fmt.Printf("ℹ️  📊 Exported %d rows in %v\n", rowCount, duration.Round(time.Millisecond))
-	fmt.Printf("ℹ️  📁 Output file: %s\n", outputFile)
+	if !output.IsJSON() {
+		duration := time.Since(startTime)
+		fmt.Printf("✅ ✅ Export completed successfully!\n")
+		fmt.Printf("ℹ️  📊 Exported %d rows in %v\n", rowCount, duration.Round(time.Millisecond))
+		fmt.Printf("ℹ️  📁 Output file: %s\n", outputFile)
+	}
 
-	return nil
+	return rowCount, nil
 }
 
 func init() {
