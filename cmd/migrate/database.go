@@ -9,6 +9,7 @@ import (
 	"github.com/andymarthin/pgtransfer/internal/io"
 	"github.com/andymarthin/pgtransfer/internal/log"
 	"github.com/andymarthin/pgtransfer/internal/output"
+	"github.com/andymarthin/pgtransfer/internal/preflight"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -98,6 +99,17 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--schema-only and --data-only are mutually exclusive")
 	}
 
+	// A migration writes an archive with pg_dump and restores it with
+	// pg_restore (or psql, for a plain SQL file). Both are checked here, at
+	// the start: a transfer that dies after the archive is written leaves a
+	// temp file and a half-written target.
+	if err := preflight.Check(preflight.PgDump, preflight.PgRestore, preflight.Psql); err != nil {
+		if output.IsJSON() {
+			return output.Fail("migrate database", "missing_tool", "%v", err)
+		}
+		return err
+	}
+
 	// Load config
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -170,6 +182,27 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 
 	} else {
 		return fmt.Errorf("invalid number of arguments")
+	}
+
+	// A tunnelled end has to be able to authenticate before the archive is
+	// written. The tunnel is opened in-process, so there is no ssh binary to
+	// look for — what can be checked is the identity the profile presents.
+	if err := preflight.CheckProfiles(
+		preflight.ProfileSSH{
+			Name: sourceProfileName, Enabled: sourceProfile.SSH.Enabled,
+			KeyPath: sourceProfile.SSH.KeyPath, Passphrase: sourceProfile.SSH.Passphrase,
+			Password: sourceProfile.SSH.Password,
+		},
+		preflight.ProfileSSH{
+			Name: targetProfileName, Enabled: targetProfile.SSH.Enabled,
+			KeyPath: targetProfile.SSH.KeyPath, Passphrase: targetProfile.SSH.Passphrase,
+			Password: targetProfile.SSH.Password,
+		},
+	); err != nil {
+		if output.IsJSON() {
+			return output.Fail("migrate database", "ssh_identity", "%v", err)
+		}
+		return err
 	}
 
 	if migrateVerbose {

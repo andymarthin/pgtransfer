@@ -352,6 +352,16 @@ func RestoreDatabaseSmartWithOptions(dbURL, dumpPath string, options *RestoreOpt
 	return restoreDatabaseSmartWithOptions(dbURL, dumpPath, options, time.Now())
 }
 
+// IsPlainTextDump reports whether the dump at dumpPath is a plain-text SQL
+// dump (restorable with psql) as opposed to a binary pg_dump archive
+// (custom/tar, restorable with pg_restore).
+//
+// A caller that has not connected yet needs this to know which client tool the
+// restore will drive.
+func IsPlainTextDump(dumpPath string) (bool, error) {
+	return isPlainTextDump(dumpPath)
+}
+
 // isPlainTextDump reports whether the dump at dumpPath is a plain-text SQL
 // dump (restorable with psql) as opposed to a binary pg_dump archive
 // (custom/tar, restorable with pg_restore).
@@ -386,11 +396,42 @@ func isPlainTextDump(dumpPath string) (bool, error) {
 	if !utf8.Valid(content) {
 		return false, nil
 	}
-	return strings.Contains(text, "-- PostgreSQL database dump") ||
+	if strings.Contains(text, "-- PostgreSQL database dump") ||
 		strings.Contains(text, "SET statement_timeout") ||
 		strings.Contains(text, "CREATE TABLE") ||
 		strings.Contains(text, "COPY ") ||
-		strings.Contains(text, "INSERT INTO"), nil
+		strings.Contains(text, "INSERT INTO") {
+		return true, nil
+	}
+
+	// A dump that matches none of the markers is still plain SQL if it reads
+	// as text and contains a statement. pg_dump output always says what it
+	// is, but a dump that was filtered, concatenated or written by hand may
+	// not, and handing one to pg_restore reports an unrecognised archive
+	// format instead of restoring it.
+	return looksLikeSQL(text), nil
+}
+
+// looksLikeSQL reports whether text reads as SQL statements rather than binary.
+//
+// The check is deliberately loose: the alternative is treating an unknown file
+// as an archive, and pg_restore refuses anything that is not one. Text that
+// parses as UTF-8, has no control characters other than whitespace, and
+// carries a statement terminator is treated as SQL.
+func looksLikeSQL(text string) bool {
+	if !utf8.ValidString(text) {
+		return false
+	}
+	for _, r := range text {
+		if r < 0x20 || r == 0x7f {
+			switch r {
+			case '\t', '\n', '\r':
+			default:
+				return false
+			}
+		}
+	}
+	return strings.Contains(text, ";")
 }
 
 // restoreWithPsql restores a plain text SQL dump using psql.

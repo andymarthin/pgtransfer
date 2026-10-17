@@ -7,6 +7,7 @@ import (
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/io"
 	"github.com/andymarthin/pgtransfer/internal/output"
+	"github.com/andymarthin/pgtransfer/internal/preflight"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -55,6 +56,20 @@ func runDumpImport(cmd *cobra.Command, args []string) error {
 	// Check if input file exists
 	if _, err := os.Stat(inputFile); err != nil {
 		return fmt.Errorf("input file not found: %w", err)
+	}
+
+	// Which tool restores the file depends on its format, and the format is
+	// read from the file itself. Check for the right one before connecting:
+	// a custom archive needs pg_restore, a plain SQL dump needs psql.
+	tools := []preflight.Tool{preflight.PgRestore}
+	if plain, err := io.IsPlainTextDump(inputFile); err == nil && plain {
+		tools = []preflight.Tool{preflight.Psql}
+	}
+	if err := preflight.Check(tools...); err != nil {
+		if output.IsJSON() {
+			return output.Fail("import dump", "missing_tool", "%v", err)
+		}
+		return err
 	}
 
 	// Load profile

@@ -202,9 +202,12 @@ for tool in pg_dump pg_restore psql; do
     fi
 done
 
+# The SSH tunnel runs in-process (golang.org/x/crypto/ssh), so no ssh binary is
+# required. What a tunnelled profile needs is a way to authenticate: an agent, a
+# key file or a password. Only the first two can be seen from here.
 missing_ssh=""
-if ! command -v ssh >/dev/null 2>&1; then
-    missing_ssh=ssh
+if [ -z "${SSH_AUTH_SOCK:-}" ] && [ ! -f "${HOME}/.ssh/id_ed25519" ] && [ ! -f "${HOME}/.ssh/id_rsa" ]; then
+    missing_ssh="no-agent-or-default-key"
 fi
 
 # Detect the package manager so the advice is copy-pasteable.
@@ -231,29 +234,11 @@ pkg_hint() {
 }
 
 ssh_hint() {
-    if [ "$os_name" = "darwin" ]; then
-        echo "ssh is part of macOS; install the Xcode command line tools if missing: xcode-select --install"
-        return
-    fi
-    if command -v apt-get >/dev/null 2>&1; then
-        echo "sudo apt-get update && sudo apt-get install -y openssh-client"
-    elif command -v dnf >/dev/null 2>&1; then
-        echo "sudo dnf install -y openssh-clients"
-    elif command -v yum >/dev/null 2>&1; then
-        echo "sudo yum install -y openssh-clients"
-    elif command -v apk >/dev/null 2>&1; then
-        echo "sudo apk add openssh-client"
-    elif command -v pacman >/dev/null 2>&1; then
-        echo "sudo pacman -S openssh"
-    elif command -v zypper >/dev/null 2>&1; then
-        echo "sudo zypper install openssh-clients"
-    else
-        echo "install an OpenSSH client with your package manager"
-    fi
+    echo "start an ssh-agent and run ssh-add, or pass --ssh-key when adding a profile"
 }
 
 if [ -z "$missing_pg" ] && [ -z "$missing_ssh" ]; then
-    ok "PostgreSQL client tools and an SSH client are both available"
+    ok "PostgreSQL client tools are available"
 else
     printf '\n' >&2
     if [ -n "$missing_pg" ]; then
@@ -265,10 +250,11 @@ else
 EOF
     fi
     if [ -n "$missing_ssh" ]; then
-        warn "Missing SSH client: ${missing_ssh}"
+        warn "No SSH agent running and no default key found"
         cat >&2 <<EOF
-    Needed for: profiles with SSH tunnels enabled
-    Install with:
+    Needed for: profiles with SSH tunnels enabled, which have to authenticate
+    to the bastion. Either start an agent and add a key, or give each tunnelled
+    profile its own key or password:
         $(ssh_hint)
 EOF
     fi

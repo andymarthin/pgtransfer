@@ -82,9 +82,9 @@ curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts
 ```
 
 Installs to `/usr/local/bin` when writable, otherwise to `~/.local/bin` (and tells
-you how to add it to `PATH`). The script also checks for `pg_dump`, `pg_restore`,
-`psql` and an OpenSSH client, and prints the install command for your platform if
-any are missing.
+you how to add it to `PATH`). The script also checks for `pg_dump`, `pg_restore`
+and `psql`, and warns if no SSH agent or default key is available, printing the
+install command or the fix for your platform if either is missing.
 
 | Variable | Purpose |
 | --- | --- |
@@ -125,13 +125,34 @@ go build -o pgtransfer .
 ### Requirements
 
 `pgtransfer` itself needs nothing beyond a PostgreSQL server. Two optional
-dependencies, checked by the install script:
+dependencies:
 
-- **`pg_dump` / `pg_restore` / `psql`** — needed by `export dump`, `import dump`
-  and `migrate database`. CSV export and import do not use them.
-- **An OpenSSH client** — needed only for SSH tunnels.
+- **`pg_dump` / `pg_restore` / `psql`** — needed by `export dump`, `import dump`,
+  `migrate database` and `migrate rollback`. CSV export and import do not use
+  them.
+- **An SSH key, password or agent** — needed only for SSH tunnels.
 
 Client tools should be the same major version as the server, or newer.
+
+Both are checked before a command does any work, so a missing one is reported by
+name rather than failing part-way through a transfer:
+
+```console
+$ pgtransfer export dump prod backup.dump
+Error: pg_dump (needed by export dump and migrate database) not found in PATH — install the PostgreSQL client tools
+```
+
+A command that needs several tools reports all the missing ones at once. For a
+tunnelled profile the check is on the identity, not a binary — the tunnel is
+opened in-process, so there is no `ssh` executable involved:
+
+```console
+$ pgtransfer migrate database prod staging
+Error: profile "prod": SSH key /Users/me/.ssh/id_ed25519 is not readable: no such file or directory
+```
+
+In `--json` mode the failure carries a code — `missing_tool` or `ssh_identity` —
+and nothing has been written or connected to.
 
 ---
 
@@ -583,6 +604,14 @@ Three ways to authenticate to the bastion, tried in this order:
 | SSH agent | `ssh-add` (uses `SSH_AUTH_SOCK`) | Tried automatically; no flag needed |
 | Key file | `--ssh-key ~/.ssh/id_rsa` | Add `--ssh-passphrase` if the key is encrypted |
 | Password | `--ssh-password` | Least secure; omit the flag to be prompted |
+
+A profile needs at least one of them. That is checked before the command starts,
+along with the key file itself: a `--ssh-key` path that does not exist is
+reported as a missing key rather than as a failed connection, and an unreadable
+key is an error even when a password is also set, because the profile says the
+key is what it wants to use.
+
+The tunnel runs in-process, so no `ssh` executable is needed on the machine.
 
 Verify a tunnel:
 
