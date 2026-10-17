@@ -172,3 +172,38 @@ jobs:
             scripts/install.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 4. Ask the Homebrew tap to pick up the new version.
+      #
+      #    This is a best-effort notification. It is skipped when the tap
+      #    token is not configured, and the tap also polls daily, so a missed
+      #    dispatch self-heals.
+      #
+      #    NOTE: the release above is created as a *draft*. A draft's assets
+      #    are not publicly downloadable, so dispatching now would only work
+      #    after the draft is published. When the draft is published, re-run
+      #    this workflow (or let the tap's daily schedule pick it up). If you
+      #    switch the release to `draft: false`, this fires immediately and
+      #    correctly.
+      # -----------------------------------------------------------------------
+      - name: Notify Homebrew tap
+        continue-on-error: true
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set; skipping tap dispatch."
+            echo "The tap's scheduled run will pick up ${VERSION} within a day."
+            exit 0
+          fi
+
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${TAP_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/andymarthin/homebrew-pgtransfer/dispatches" \
+            -d "{\"event_type\":\"pgtransfer-release\",\"client_payload\":{\"version\":\"${VERSION}\"}}"
+
+          echo "Dispatched pgtransfer-release for ${VERSION} to the Homebrew tap."
