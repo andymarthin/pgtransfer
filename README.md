@@ -326,6 +326,9 @@ Upgrade later with:
 brew update && brew upgrade pgtransfer
 ```
 
+The formula lives in the [andymarthin/homebrew-pgtransfer](https://github.com/andymarthin/homebrew-pgtransfer)
+tap repository, not in this one.
+
 #### Option D — build from source
 
 Requires **Go 1.25 or higher**.
