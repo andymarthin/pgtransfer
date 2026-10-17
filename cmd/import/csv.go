@@ -42,8 +42,8 @@ Batch processing helps with memory efficiency and performance when dealing with 
   # Import with headers (first row contains column names)
   pgtransfer import csv myprofile customers customers.csv --headers
 
-  # Import with custom batch size (default: 500)
-  pgtransfer import csv myprofile products products.csv --batch-size 1000
+  # Import with custom batch size (default: 20000)
+  pgtransfer import csv myprofile products products.csv --batch-size 50000
 
   # Import with overwrite (truncate table first)
   pgtransfer import csv myprofile orders orders.csv --overwrite`,
