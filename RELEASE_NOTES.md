@@ -1,94 +1,131 @@
-# PGTransfer v1.1.0
+# PGTransfer v1.2.0
 
-A robustness, correctness and tooling release. This version hardens backup and
-restore against PostgreSQL client/server version skew, makes connections far
-more reliable, adds a proper automated test suite with CI, and documents the
-full local testing stack.
-
-## ⚠️ Behaviour changes
-
-- **Restores are now tolerant by default.** `pgtransfer import dump` no longer
-  fails when `pg_restore` reports benign errors such as *"unrecognized
-  configuration parameter"* that occur when the client tools are newer than the
-  server (a very common real-world case). These are reported as warnings and
-  the restore completes. Pass the new **`--strict`** flag to fail on the first
-  error instead.
-- **`import csv` without `--headers` now imports every row as data.** Previously
-  the first line could be silently skipped; now the whole file is treated as
-  data unless `--headers` is given. If your CSV has a header row, pass
-  `--headers`.
+An automation- and distribution-focused release. This version makes pgtransfer
+scriptable and AI-drivable with machine-readable `--json` output and a Model
+Context Protocol server, and makes it far easier to install with prebuilt
+binaries, a one-line install script, and a Homebrew tap.
 
 ## ✨ New features
 
-- **`pgtransfer import dump`** gains four flags:
-  - `--clean` — drop existing objects before restoring (`pg_restore` only).
-  - `--verbose` — verbose output from the restore tools.
-  - `--timeout <seconds>` — abort the restore after the given time (`0` = none).
-  - `--strict` — fail on the first restore error instead of tolerating
-    version-skew noise.
-- **New `--version` / `-v` support** on the root command, sharing the output of
-  the `version` subcommand.
+### Machine-readable `--json` output
 
-## 🐛 Fixes & robustness
+Every command accepts a global `--json` flag (or `PGTRANSFER_JSON=1`) and emits
+a single, stable JSON object on stdout instead of human-friendly text:
 
-- **Connection handling reworked** (`internal/db`): direct connections now
-  configure the connection pool consistently, surface ping failures correctly,
-  and no longer leak an open pool when a connection attempt fails.
-- **SSH support consolidated** into a new `internal/sshx` package with a single
-  `BuildAuthMethods` path covering key files, passphrases, `ssh-agent` and
-  passwords. Key paths now expand `$ENV` variables. The old
-  `internal/utils.ReadPrivateKey` is kept as a thin, deprecated shim.
-- **Dump/restore rewritten** to reliably auto-detect plain-text vs. custom-format
-  archives, normalise output filenames per format (`--format` → `.sql`, `.dump`,
-  `.tar`, directory), and report clear timing information.
-- **CSV import/export hardened**: correct header handling, correct value
-  formatting for timestamps, numerics, booleans and byte arrays, and a progress
-  bar that degrades gracefully when `COUNT(*)` is unavailable.
-- **Version metadata** (`Version`, `Commit`, `Date`) is now injected at build
-  time and printed consistently.
+```json
+{
+  "ok": true,
+  "command": "export csv",
+  "data": { "rows": 250, "output_file": "out.csv" },
+  "error": null
+}
+```
 
-## 🧪 Testing & CI
+On failure `ok` is `false` and `error` carries a stable code and message:
 
-- **New GitHub Actions CI** (`.github/workflows/ci.yml`) runs on every push and
-  pull request:
-  - **Build, vet & unit tests** — `gofmt`, `go vet`, `go build`, and
-    `go test -race` with a coverage artifact.
-  - **Integration tests** — provisions PostgreSQL and the repository's SSH
-    image, installs PostgreSQL 17 client tools (to exercise the version-skew
-    path), and runs the build-tagged integration suite.
-- **Unit tests added** across `internal/config`, `internal/io`, `internal/sshx`,
-  `internal/utils`, `internal/log`, and the `cmd/*` packages. Unit coverage rose
-  from ~11% to ~25%, with `internal/log` at 96%, `internal/utils` at 94%,
-  `internal/sshx` at 83% and `internal/config` at 79%.
-- **Integration tests added** (build-tagged, `-tags=integration`) covering CSV
-  export/import round-trips, plain and custom dump/restore with format
-  auto-detection, connection-aware dumps, and the SSH tunnel path. They skip
-  cleanly when no database is available, and `PGTRANSFER_TEST_REQUIRE=1`
-  turns missing prerequisites into failures in CI.
-- **Local test stack refreshed** (`scripts/`): the SSH test server is now a
-  small Alpine image with TCP forwarding enabled, and the SSH user/password are
-  overridable via build args. See `scripts/README.md`.
+```json
+{
+  "ok": false,
+  "command": "test-connection",
+  "error": { "code": "profile_not_found", "message": "profile \"ghost\" not found" }
+}
+```
 
-## 📖 Documentation
+- Wired into `version`, `test-connection`, `profile list|active|use|delete`,
+  `export csv|dump`, `import csv|dump` and `migrate database|rollback`.
+- Exactly **one** JSON object is written per invocation, including parser-level
+  failures such as an unknown subcommand or an invalid flag
+  (`code: "usage_error"`).
+- The process still exits non-zero on failure.
+- Stable error codes: `usage_error`, `profile_not_found`, `no_active_profile`,
+  `config_load_failed`, `connection_failed`, `export_failed`, `import_failed`,
+  `dump_failed`, `restore_failed`, `migration_failed`, `rollback_failed`,
+  `file_exists`, `file_not_found`, `truncate_failed`, `invalid_input`.
+- **Passwords are never emitted.** Profiles report `has_password` instead.
 
-- README updated with a CI badge, a full **Test Suite** section (unit vs.
-  integration, environment-variable reference, how to run everything), and the
-  new `import dump` flags.
-- `scripts/README.md` documents the SSH image and integration-test workflow.
+### MCP server for AI agents
 
-## 📥 Downloads
+`pgtransfer mcp` runs a
+[Model Context Protocol](https://modelcontextprotocol.io) server over stdio, so
+AI hosts such as Claude Desktop, Cursor and custom agent runtimes can drive
+pgtransfer as typed tools.
+
+Exposed tools: `list_profiles`, `test_connection`, `export_csv`, `import_csv`,
+`export_dump`, `import_dump`, `migrate_database`.
+
+```json
+{
+  "mcpServers": {
+    "pgtransfer": { "command": "pgtransfer", "args": ["mcp"] }
+  }
+}
+```
+
+Tool failures are reported in-band (`isError: true` plus a structured payload)
+rather than as protocol errors, so a model can read the problem and correct
+itself. Because stdout carries the protocol, incidental library output is
+redirected to stderr.
+
+### Install script
+
+A POSIX `sh` installer downloads the binary for your platform, verifies it
+against the release's `SHA256SUMS` and installs it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh | sh
+```
+
+It installs to `/usr/local/bin` when writable, otherwise `~/.local/bin`, and is
+configurable via `PGTRANSFER_VERSION`, `PGTRANSFER_INSTALL` and
+`PGTRANSFER_NO_SUDO`. **It refuses to install an archive whose checksum does not
+match.**
+
+### Homebrew
+
+```bash
+brew tap andymarthin/pgtransfer
+brew install pgtransfer
+```
+
+The formula lives in the
+[homebrew-pgtransfer](https://github.com/andymarthin/homebrew-pgtransfer) tap and
+updates itself from each release.
+
+## 🔧 Tooling & CI
+
+- **Releases are now published immediately** instead of being created as drafts,
+  so artifacts are downloadable as soon as the workflow finishes.
+- The release workflow notifies the Homebrew tap, which rewrites its formula
+  against the new `SHA256SUMS`.
+- **New performance-friendly CI triggers:** CI runs on pushes to `main` and on
+  all pull requests. Topic branches are no longer built twice (previously a push
+  to a branch with an open PR triggered two identical runs).
+- CI and Release share the same reusable pipeline (`reusable-ci.yml`), now with
+  an **Install script** job that verifies POSIX syntax, the checksum gate, and a
+  real install.
+- Runners pinned to `ubuntu-24.04`; GitHub Actions bumped to Node 24 runtimes.
+
+## ⬆️ Requirements
+
+- **Go 1.25 or higher** to build from source (the MCP SDK requires it). Prebuilt
+  binaries are unaffected.
+- `pg_dump`, `pg_restore` and `psql` on your `PATH` for dump/restore.
+- An OpenSSH client for SSH tunnels.
+
+## 📄 License
+
+The project is now shipped with its `LICENSE` file (MIT), which the README had
+always claimed but the repository was missing.
+
+## Downloads
 
 Choose the appropriate binary for your platform:
 
-- **Linux (x64)**: `pgtransfer-v1.1.0-linux-amd64.tar.gz`
-- **Linux (ARM64)**: `pgtransfer-v1.1.0-linux-arm64.tar.gz`
-- **macOS (Intel)**: `pgtransfer-v1.1.0-darwin-amd64.tar.gz`
-- **macOS (Apple Silicon)**: `pgtransfer-v1.1.0-darwin-arm64.tar.gz`
+- **Linux (x64)**: `pgtransfer-v1.2.0-linux-amd64.tar.gz`
+- **Linux (ARM64)**: `pgtransfer-v1.2.0-linux-arm64.tar.gz`
+- **macOS (Intel)**: `pgtransfer-v1.2.0-darwin-amd64.tar.gz`
+- **macOS (Apple Silicon)**: `pgtransfer-v1.2.0-darwin-arm64.tar.gz`
+- **Installer**: `install.sh`
+- **Checksums**: `SHA256SUMS`
 
-## 🚀 Upgrade
-
-Download the archive for your platform, extract `pgtransfer`, and replace your
-existing binary. Existing profiles and configuration under `~/.pgtransfer/` are
-fully compatible.
-
-**Full changelog:** [`v1.0.1...v1.1.0`](https://github.com/andymarthin/pgtransfer/compare/v1.0.1...v1.1.0)
+Verify downloads against the attached `SHA256SUMS`.
