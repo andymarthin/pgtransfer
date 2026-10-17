@@ -410,6 +410,11 @@ A profile can reach its database through a bastion host. `pgtransfer` opens the
 tunnel for the duration of the command and closes it afterwards — nothing to
 supervise.
 
+The tunnel binds a free port on `127.0.0.1` and starts forwarding before the
+command runs, so a tunnel that cannot be set up fails immediately and names the
+reason (unreachable bastion, rejected credentials) rather than leaving `pg_dump`
+or `pg_restore` to time out against a port that was never listening.
+
 ```bash
 pgtransfer profile add prod \
   --host localhost \
@@ -441,7 +446,7 @@ pgtransfer test-connection prod
 
 The output includes the local port the tunnel is forwarding on, e.g.
 `localhost:5433`, so you can point `psql`, pgAdmin or DBeaver at the same database
-while a command is running.
+while that command runs.
 
 ---
 

@@ -10,11 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/andymarthin/pgtransfer/internal/config"
-	"github.com/andymarthin/pgtransfer/internal/db"
 	"github.com/andymarthin/pgtransfer/internal/sshx"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"golang.org/x/crypto/ssh"
@@ -616,21 +616,15 @@ func DumpDatabaseWithConnection(profile config.Profile, dumpPath string) error {
 
 	utils.PrintInfo(nil, "Starting PostgreSQL dump...")
 
-	// Establish connection (handles both direct and SSH tunnel)
-	conn, err := db.Connect(profile)
+	tunnel, err := tunnelForCommand(profile)
 	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("failed to establish SSH tunnel: %w", err)
 	}
-	defer conn.Close()
-
-	// For SSH tunnels, we need to handle the connection differently
-	if conn.Mode == "tunnel" {
-		return dumpViaTunnel(profile, dumpPath, start)
+	if tunnel != nil {
+		defer tunnel.Close()
 	}
 
-	// For direct connections, use the standard approach
-	dbURL := config.BuildDSN(profile)
-	return executePgDump(dbURL, dumpPath, start, nil)
+	return executePgDump(dbURLFor(profile, tunnel), dumpPath, start, nil)
 }
 
 // DumpDatabaseWithConnectionAndOptions performs a database dump with advanced options using DBConnection
@@ -641,63 +635,15 @@ func DumpDatabaseWithConnectionAndOptions(profile config.Profile, dumpPath strin
 		return fmt.Errorf("pg_dump not found in PATH — please install PostgreSQL client tools")
 	}
 
-	// Establish connection (handles both direct and SSH tunnel)
-	conn, err := db.Connect(profile)
-	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
-	}
-	defer conn.Close()
-
-	// For SSH tunnels, we need to handle the connection differently
-	if conn.Mode == "tunnel" {
-		return dumpViaTunnelWithOptions(profile, dumpPath, options, start)
-	}
-
-	// For direct connections, use the standard approach
-	dbURL := config.BuildDSN(profile)
-	return executePgDumpWithOptions(dbURL, dumpPath, options, start)
-}
-
-// dumpViaTunnel handles database dumps through SSH tunnels
-func dumpViaTunnel(profile config.Profile, dumpPath string, start time.Time) error {
-	utils.PrintInfo(nil, "🔐 Using SSH tunnel for database dump...")
-
-	// Establish SSH tunnel and get local port
-	tunnel, localPort, err := establishSSHTunnel(profile)
+	tunnel, err := tunnelForCommand(profile)
 	if err != nil {
 		return fmt.Errorf("failed to establish SSH tunnel: %w", err)
 	}
-	defer tunnel.Close()
-
-	// Create local profile using the tunnel
-	localProfile := profile
-	localProfile.Host = "localhost"
-	localProfile.Port = localPort
-	localProfile.SSH.Enabled = false // Disable SSH for the local connection
-
-	dbURL := config.BuildDSN(localProfile)
-	return executePgDump(dbURL, dumpPath, start, nil)
-}
-
-// dumpViaTunnelWithOptions handles database dumps through SSH tunnels with options
-func dumpViaTunnelWithOptions(profile config.Profile, dumpPath string, options *DumpOptions, start time.Time) error {
-	utils.PrintInfo(nil, "🔐 Using SSH tunnel for database dump with options...")
-
-	// Establish SSH tunnel and get local port
-	tunnel, localPort, err := establishSSHTunnel(profile)
-	if err != nil {
-		return fmt.Errorf("failed to establish SSH tunnel: %w", err)
+	if tunnel != nil {
+		defer tunnel.Close()
 	}
-	defer tunnel.Close()
 
-	// Create local profile using the tunnel
-	localProfile := profile
-	localProfile.Host = "localhost"
-	localProfile.Port = localPort
-	localProfile.SSH.Enabled = false // Disable SSH for the local connection
-
-	dbURL := config.BuildDSN(localProfile)
-	return executePgDumpWithOptions(dbURL, dumpPath, options, start)
+	return executePgDumpWithOptions(dbURLFor(profile, tunnel), dumpPath, options, start)
 }
 
 // executePgDump executes the pg_dump command with basic options
@@ -862,42 +808,15 @@ func RestoreDatabaseWithConnectionAndOptions(profile config.Profile, dumpPath st
 		return fmt.Errorf("dump file not found: %w", err)
 	}
 
-	// Establish connection (handles both direct and SSH tunnel)
-	conn, err := db.Connect(profile)
-	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
-	}
-	defer conn.Close()
-
-	// For SSH tunnels, we need to handle the connection differently
-	if conn.Mode == "tunnel" {
-		return restoreViaTunnel(profile, dumpPath, options, start)
-	}
-
-	// For direct connections, use the standard approach
-	dbURL := config.BuildDSN(profile)
-	return restoreDatabaseSmartWithOptions(dbURL, dumpPath, options, start)
-}
-
-// restoreViaTunnel handles database restores through SSH tunnels
-func restoreViaTunnel(profile config.Profile, dumpPath string, options *RestoreOptions, start time.Time) error {
-	utils.PrintInfo(nil, "🔐 Using SSH tunnel for database restore...")
-
-	// Establish SSH tunnel and get local port
-	tunnel, localPort, err := establishSSHTunnel(profile)
+	tunnel, err := tunnelForCommand(profile)
 	if err != nil {
 		return fmt.Errorf("failed to establish SSH tunnel: %w", err)
 	}
-	defer tunnel.Close()
+	if tunnel != nil {
+		defer tunnel.Close()
+	}
 
-	// Create local profile using the tunnel
-	localProfile := profile
-	localProfile.Host = "localhost"
-	localProfile.Port = localPort
-	localProfile.SSH.Enabled = false // Disable SSH for the local connection
-
-	dbURL := config.BuildDSN(localProfile)
-	return restoreDatabaseSmartWithOptions(dbURL, dumpPath, options, start)
+	return restoreDatabaseSmartWithOptions(dbURLFor(profile, tunnel), dumpPath, options, start)
 }
 
 // restoreDatabaseSmartWithOptions detects the dump format and restores it,
@@ -917,13 +836,38 @@ func restoreDatabaseSmartWithOptions(dbURL, dumpPath string, options *RestoreOpt
 	return restoreWithPgRestore(dbURL, dumpPath, options, start)
 }
 
-// establishSSHTunnel creates a local port forward for external commands like pg_dump
-func establishSSHTunnel(profile config.Profile) (*ssh.Client, int, error) {
+// sshTunnel is a local listener that forwards every accepted connection to the
+// database host through an SSH client. It is created once per command and
+// closed when the command finishes.
+type sshTunnel struct {
+	client   *ssh.Client
+	listener net.Listener
+	port     int
+	done     chan struct{}
+}
+
+// localPort returns the port the tunnel listens on.
+func (t *sshTunnel) localPort() int { return t.port }
+
+// Close stops accepting connections, closes the listener and the SSH client,
+// and waits for the forwarding goroutine to exit.
+func (t *sshTunnel) Close() error {
+	close(t.done)
+	err := t.listener.Close()
+	if t.client != nil {
+		_ = t.client.Close()
+	}
+	return err
+}
+
+// openTunnel dials SSH and starts forwarding. The listener is bound before it
+// is returned, so a tunnel handed back to the caller is already accepting
+// connections — there is no window in which the port is advertised but dead.
+func openTunnel(profile config.Profile) (*sshTunnel, error) {
 	if !profile.SSH.Enabled {
-		return nil, 0, fmt.Errorf("SSH is not enabled for this profile")
+		return nil, fmt.Errorf("SSH is not enabled for this profile")
 	}
 
-	// Establish SSH tunnel and get local port
 	authMethods, err := sshx.BuildAuthMethods(sshx.Config{
 		User:       profile.SSH.User,
 		Host:       profile.SSH.Host,
@@ -934,7 +878,7 @@ func establishSSHTunnel(profile config.Profile) (*ssh.Client, int, error) {
 		Timeout:    profile.SSH.Timeout,
 	})
 	if err != nil {
-		return nil, 0, fmt.Errorf("SSH auth setup failed: %w", err)
+		return nil, fmt.Errorf("SSH auth setup failed: %w", err)
 	}
 
 	clientConfig := &ssh.ClientConfig{
@@ -944,68 +888,89 @@ func establishSSHTunnel(profile config.Profile) (*ssh.Client, int, error) {
 		Timeout:         time.Duration(profile.SSH.Timeout) * time.Second,
 	}
 
-	// Connect to SSH server
 	addr := fmt.Sprintf("%s:%d", profile.SSH.Host, profile.SSH.Port)
 	sshClient, err := ssh.Dial("tcp", addr, clientConfig)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed SSH connection: %w", err)
+		return nil, fmt.Errorf("failed SSH connection: %w", err)
 	}
 
-	// Find an available local port
-	listener, err := net.Listen("tcp", "localhost:0")
+	// Bind on the loopback interface only: the forwarded database port must
+	// not be reachable from other hosts.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		sshClient.Close()
-		return nil, 0, fmt.Errorf("failed to find available local port: %w", err)
+		_ = sshClient.Close()
+		return nil, fmt.Errorf("failed to find available local port: %w", err)
 	}
-	localPort := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
 
-	// Start port forwarding in a goroutine
-	go func() {
-		for {
-			// Listen on local port
-			localListener, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", localPort))
-			if err != nil {
-				return
-			}
-			defer localListener.Close()
+	tunnel := &sshTunnel{
+		client:   sshClient,
+		listener: listener,
+		port:     listener.Addr().(*net.TCPAddr).Port,
+		done:     make(chan struct{}),
+	}
+	go tunnel.forward(profile)
+	return tunnel, nil
+}
 
-			for {
-				// Accept local connection
-				localConn, err := localListener.Accept()
-				if err != nil {
-					return
-				}
-
-				// Connect to remote database through SSH tunnel
-				remoteAddr := fmt.Sprintf("%s:%d", profile.Host, profile.Port)
-				remoteConn, err := sshClient.Dial("tcp", remoteAddr)
-				if err != nil {
-					localConn.Close()
-					continue
-				}
-
-				// Start forwarding data between connections
-				go func() {
-					defer localConn.Close()
-					defer remoteConn.Close()
-
-					// Forward data in both directions
-					go func() {
-						defer localConn.Close()
-						defer remoteConn.Close()
-						copyData(localConn, remoteConn)
-					}()
-					copyData(remoteConn, localConn)
-				}()
-			}
+// forward accepts local connections until the tunnel is closed and pipes each
+// one to the database host over SSH.
+func (t *sshTunnel) forward(profile config.Profile) {
+	remoteAddr := fmt.Sprintf("%s:%d", profile.Host, profile.Port)
+	for {
+		localConn, err := t.listener.Accept()
+		if err != nil {
+			return
 		}
-	}()
+		remoteConn, err := t.client.Dial("tcp", remoteAddr)
+		if err != nil {
+			_ = localConn.Close()
+			continue
+		}
+		go pipeConnections(localConn, remoteConn)
+	}
+}
 
-	// Give the tunnel a moment to start
-	time.Sleep(100 * time.Millisecond)
+// pipeConnections copies data in both directions and closes both connections
+// when either side finishes, so a half-open socket cannot be left behind.
+func pipeConnections(local, remote net.Conn) {
+	var once sync.Once
+	closeBoth := func() {
+		_ = local.Close()
+		_ = remote.Close()
+	}
 
-	return sshClient, localPort, nil
+	done := make(chan struct{}, 2)
+	go func() { copyData(remote, local); done <- struct{}{} }()
+	go func() { copyData(local, remote); done <- struct{}{} }()
+
+	<-done
+	once.Do(closeBoth)
+	// Unblock the other direction, which may be parked in a read.
+	<-done
+}
+
+// tunnelForCommand returns a tunnel only when the profile needs one. It is
+// created once per dump or restore instead of relying on a pooled connection
+// that is then discarded.
+func tunnelForCommand(profile config.Profile) (*sshTunnel, error) {
+	if !profile.SSH.Enabled {
+		return nil, nil
+	}
+	utils.PrintInfo(nil, "🔐 Using SSH tunnel to %s:%d...", profile.SSH.Host, profile.SSH.Port)
+	return openTunnel(profile)
+}
+
+// dbURLFor builds the connection string a dump or restore should use. With
+// a tunnel the connection points at the tunnel's local port.
+func dbURLFor(profile config.Profile, tunnel *sshTunnel) string {
+	if tunnel == nil {
+		return config.BuildDSN(profile)
+	}
+	localProfile := profile
+	localProfile.Host = "127.0.0.1"
+	localProfile.Port = tunnel.localPort()
+	localProfile.SSH.Enabled = false
+	return config.BuildDSN(localProfile)
 }
 
 // copyData copies data between two connections
