@@ -148,7 +148,7 @@ func registerImportCSV(srv *mcp.Server) {
 
 		table := qualifyTable(in.Table)
 		if in.Truncate {
-			if _, err := conn.DB.Exec(fmt.Sprintf("TRUNCATE TABLE %s", table)); err != nil {
+			if _, err := conn.DB.Exec(fmt.Sprintf("TRUNCATE TABLE %s", io.QuoteTable(table))); err != nil {
 				return failResult("truncate_failed", err.Error())
 			}
 		}

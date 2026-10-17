@@ -3,7 +3,6 @@ package io
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	goio "io"
 	"net"
@@ -239,12 +238,18 @@ type RestoreOptions struct {
 }
 
 // buildPgRestoreArgs assembles the pg_restore argument list.
-func buildPgRestoreArgs(dbURL, dumpPath string, clean bool) []string {
+func buildPgRestoreArgs(dbURL, dumpPath string, clean, strict bool) []string {
 	args := []string{"--no-owner", "--no-privileges"}
 	if clean {
 		// --clean requires --if-exists to avoid hard failures when
 		// objects do not exist yet.
 		args = append(args, "--clean", "--if-exists")
+	}
+	if strict {
+		// Without --exit-on-error pg_restore reports a failed object on stderr
+		// and keeps going, then exits 1 — indistinguishable from the benign
+		// version-skew case. With it, the first failure aborts the restore.
+		args = append(args, "--exit-on-error")
 	}
 	args = append(args, "--dbname", dbURL, dumpPath)
 	return args
@@ -263,7 +268,7 @@ func RestoreDatabase(dbURL, dumpPath string) error {
 
 	utils.PrintInfo(nil, "Starting database restore from %s...", dumpPath)
 
-	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, false), dumpPath, nil, start)
+	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, false, false), dumpPath, nil, start)
 }
 
 // RestoreDatabaseSmart automatically detects dump format and uses appropriate tool
@@ -354,7 +359,7 @@ func restoreWithPgRestore(dbURL, dumpPath string, options *RestoreOptions, start
 	utils.PrintInfo(nil, "Starting database restore from %s using pg_restore...", dumpPath)
 
 	clean := options != nil && options.Clean
-	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, clean), dumpPath, options, start)
+	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, clean, restoreIsStrict(options)), dumpPath, options, start)
 }
 
 // runRestoreCommand runs a restore tool (psql/pg_restore) while driving the
@@ -369,7 +374,15 @@ func runRestoreCommand(tool string, args []string, dumpPath string, options *Res
 
 	cmd := exec.CommandContext(ctx, tool, args...)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	// Restore errors are classified by what the tool wrote to stderr, not by
+	// its exit status. pg_restore exits 1 both for "completed with ignorable
+	// errors" and for "this table failed to load", so the exit code alone
+	// cannot distinguish a version-skew warning from a restore that silently
+	// dropped data. Capture stderr, classify it, and pass everything that is
+	// not a known-benign message through to the user.
+	collector := &stderrCollector{w: os.Stderr}
+	cmd.Stderr = collector
 
 	bar := NewProgressBarWithTimer(0, fmt.Sprintf("Restoring from %s", dumpPath))
 
@@ -392,19 +405,34 @@ func runRestoreCommand(tool string, args []string, dumpPath string, options *Res
 				return fmt.Errorf("%s timed out after %d seconds", tool, options.Timeout)
 			}
 			if err != nil {
-				// pg_restore exits with status 1 when it encountered errors it
-				// was told (or defaulted) to ignore — e.g. benign client/server
-				// version skew such as "unrecognized configuration parameter".
-				// Treat that as a warning unless the caller asked for strict
-				// behaviour.
-				if tool == "pg_restore" && !restoreIsStrict(options) && pgRestoreErrorsIgnored(err) {
+				collector.flush()
+				problems := collector.erroneousLines()
+				if !restoreIsStrict(options) && len(problems) == 0 {
+					// Nothing in the output looks like a real failure, so the
+					// non-zero status came from warnings alone: version skew,
+					// objects already present, or privileges we were told not to
+					// restore. That is the case the tolerant default exists for.
 					bar.Finish()
 					duration := time.Since(start)
 					utils.PrintWarning(nil, "⚠️  Database restored with warnings from %s", dumpPath)
+					if n := collector.warningCount(); n > 0 {
+						utils.PrintInfo(nil, "ℹ️  %d message(s) were ignored (client/server version differences, or objects that already existed)", n)
+					}
 					utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
 					return nil
 				}
+				if len(problems) > 0 {
+					return fmt.Errorf("%s reported %d error(s) restoring %s (first: %s): %w",
+						tool, len(problems), dumpPath, problems[0], err)
+				}
 				return fmt.Errorf("%s failed: %w", tool, err)
+			}
+			collector.flush()
+			if problems := collector.erroneousLines(); len(problems) > 0 {
+				// Exit status 0 but real errors on stderr: psql with
+				// ON_ERROR_STOP=off does exactly this.
+				return fmt.Errorf("%s completed but reported %d error(s) restoring %s (first: %s)",
+					tool, len(problems), dumpPath, problems[0])
 			}
 			bar.Finish()
 			duration := time.Since(start)
@@ -428,15 +456,141 @@ func restoreIsStrict(options *RestoreOptions) bool {
 	return options != nil && options.Strict
 }
 
-// pgRestoreErrorsIgnored reports whether the pg_restore error corresponds to
-// the "errors ignored" condition (exit status 1 with the ignore-errors flag).
-func pgRestoreErrorsIgnored(err error) bool {
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
+// stderrCollector tees a restore tool's stderr to the user while remembering
+// enough of it to decide whether the run actually succeeded.
+//
+// The exit status alone is not a reliable signal: pg_restore returns 1 both
+// when it ignored benign version-skew messages and when a table failed to
+// load. Classifying the messages is the only way to tell those apart.
+type stderrCollector struct {
+	w goio.Writer
+
+	// kept holds lines that could not be classified immediately. It is bounded
+	// so a restore that emits megabytes of errors cannot exhaust memory; once
+	// full, further lines are counted but not retained.
+	kept         []string
+	dropped      int
+	warnings     int
+	erroneous    int
+	unknownLines int
+	pending      []byte
+}
+
+const stderrCollectorLimit = 200
+
+func (c *stderrCollector) Write(p []byte) (int, error) {
+	// Always show the output; classification is a side effect.
+	n, err := c.w.Write(p)
+	if n > 0 {
+		c.scan(p[:n])
+	}
+	return n, err
+}
+
+// scan splits the chunk into lines and classifies the complete ones, keeping
+// any trailing partial line for the next call.
+func (c *stderrCollector) scan(p []byte) {
+	c.pending = append(c.pending, p...)
+	for {
+		i := bytes.IndexByte(c.pending, '\n')
+		if i < 0 {
+			break
+		}
+		c.classify(string(c.pending[:i]))
+		c.pending = c.pending[i+1:]
+	}
+	// Guard against a tool that writes an unterminated megabyte.
+	if len(c.pending) > 64*1024 {
+		c.classify(string(c.pending))
+		c.pending = c.pending[:0]
+	}
+}
+
+// flush classifies a trailing partial line left at end of output.
+func (c *stderrCollector) flush() {
+	if len(c.pending) > 0 {
+		c.classify(string(c.pending))
+		c.pending = c.pending[:0]
+	}
+}
+
+// classify records one stderr line and reports whether it looks like a real
+// restore failure.
+func (c *stderrCollector) classify(line string) bool {
+	switch classifyRestoreLine(line) {
+	case restoreLineBenign:
+		c.warnings++
+		return false
+	case restoreLineError:
+		c.erroneous++
+		if len(c.kept) < stderrCollectorLimit {
+			c.kept = append(c.kept, strings.TrimSpace(line))
+		} else {
+			c.dropped++
+		}
+		return true
+	default:
+		c.unknownLines++
 		return false
 	}
-	// pg_restore uses exit code 1 for "completed with ignorable errors".
-	return exitErr.ExitCode() == 1
+}
+
+// erroneousLines returns up to a handful of lines that look like real errors.
+func (c *stderrCollector) erroneousLines() []string { return c.kept }
+
+func (c *stderrCollector) warningCount() int { return c.warnings }
+
+// restoreLineKind classifies a single line of restore output.
+type restoreLineKind int
+
+const (
+	restoreLineUnknown restoreLineKind = iota
+	restoreLineBenign
+	restoreLineError
+)
+
+// benignRestoreSubstrings are message fragments that indicate a difference
+// between client and server versions, or a pre-existing object, rather than a
+// failed restore. Everything else that mentions an error is treated as fatal,
+// so a new failure mode breaks the build rather than being silently tolerated.
+var benignRestoreSubstrings = []string{
+	"unrecognized configuration parameter",
+	"already exists",
+	"does not exist, skipping",
+	"no privileges could be revoked",
+	"no ownership could be changed", // --no-owner on objects owned by another role
+	"WARNING:",
+	"NOTICE:",
+}
+
+// classifyRestoreLine decides whether a line of psql/pg_restore output
+// represents a benign warning, a real error, or neither.
+func classifyRestoreLine(line string) restoreLineKind {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return restoreLineUnknown
+	}
+
+	isError := strings.Contains(trimmed, "ERROR:") || strings.Contains(trimmed, "FATAL:") ||
+		strings.Contains(trimmed, "error:") || strings.Contains(trimmed, "pg_restore: error")
+
+	if !isError {
+		for _, b := range benignRestoreSubstrings {
+			if strings.Contains(trimmed, b) {
+				return restoreLineBenign
+			}
+		}
+		return restoreLineUnknown
+	}
+
+	// An error caused by version skew or a pre-existing object is the case the
+	// tolerant default exists for.
+	for _, b := range benignRestoreSubstrings {
+		if strings.Contains(trimmed, b) {
+			return restoreLineBenign
+		}
+	}
+	return restoreLineError
 }
 
 func commandExists(cmd string) bool {

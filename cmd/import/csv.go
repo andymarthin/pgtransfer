@@ -105,7 +105,7 @@ func runCSVImport(cmd *cobra.Command, args []string) error {
 		if !output.IsJSON() {
 			fmt.Printf("⚠️  Truncating table '%s'...\n", tableName)
 		}
-		truncateSQL := fmt.Sprintf("TRUNCATE TABLE %s", tableName)
+		truncateSQL := fmt.Sprintf("TRUNCATE TABLE %s", io.QuoteTable(tableName))
 		if _, err := dbConn.DB.Exec(truncateSQL); err != nil {
 			if output.IsJSON() {
 				return output.Fail("import csv", "truncate_failed", "failed to truncate table %q: %v", tableName, err)
