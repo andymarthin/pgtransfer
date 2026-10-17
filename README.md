@@ -276,8 +276,14 @@ pgtransfer import csv prod public.users users.csv --overwrite
 | --- | --- | --- |
 | `--headers` | on | Treat the first row as column names |
 | `--schema` | `public` | Schema for an unqualified table name |
-| `--batch-size` | `20000` | Rows inserted per transaction |
+| `--batch-size` | `20000` | Rows streamed per transaction |
 | `--overwrite` | off | `TRUNCATE` the table before importing |
+
+Import loads each batch with `COPY ... FROM STDIN`, so the server parses the values
+with its own bulk input functions. One case falls back to batched `INSERT`
+statements: a file whose header names a column the table does not have, or omits
+one the table does. That still loads the columns the file does provide, and the
+error names the mismatch.
 
 **Headers behaviour:** with the default, the first row names the columns and is not
 imported — column order in the file does not need to match the table. With
@@ -322,6 +328,7 @@ pgtransfer export dump prod users_backup.sql --table users --table orders
 | --- | --- | --- |
 | `--format` | `plain` | `plain`, `custom`, `directory` or `tar` |
 | `--compress` | off | Compress the archive (not valid for `plain`) |
+| `--compress-level` | `1` | gzip level `1`–`9` for an archive format |
 | `--schema-only` | off | Structure only, no rows |
 | `--data-only` | off | Rows only, no structure |
 | `--table` | — | Include a table; repeatable |
@@ -397,6 +404,12 @@ pgtransfer migrate database prod staging --target-database staging_copy
 | `--dry-run` | off | Report what would happen and change nothing |
 | `--validate` | off | Pre-flight check: reach both ends, and confirm any `--tables` exist in the source |
 | `--enable-rollback` | off | Back up the target before migrating, so you can roll back |
+
+The transfer writes a custom-format archive from the source and restores it into the
+target, so the data moves through `COPY` in both directions rather than being
+replayed as individual statements. The archive is compressed at level 1: it is
+written and read again within the same command, so a higher level costs time for a
+smaller file that is deleted straight after.
 | `--timeout` | `3600` | Abort after this many seconds |
 | `--batch-size` | `1000` | Rows per batch for data migration |
 | `--verbose` | off | Print the underlying commands |
@@ -711,23 +724,27 @@ export costs the same per row at the end of the table as at the start.
 
 Measured on a 5,000,000 row, 8-column table on an M1 Pro with PostgreSQL 15:
 
-| Batch size | Time | Throughput |
-| --- | --- | --- |
-| 500 | 15.3 s | ~327,000 rows/s |
-| 20,000 (default) | **9.8 s** | ~510,000 rows/s |
-| 50,000 | 5.5 s | ~909,000 rows/s |
+| Operation | Time | Throughput | Floor |
+| --- | --- | --- | --- |
+| `export csv`, batch 20,000 | **5.9 s** | ~850,000 rows/s | 4.8 s (`COPY TO`) |
+| `export csv`, batch 50,000 | 5.6 s | ~895,000 rows/s | |
+| `import csv`, batch 20,000 | **16 s** | ~310,000 rows/s | 10.3 s (`COPY FROM`) |
+| `migrate database` | 3.6 s (1M rows) | ~280,000 rows/s | 4.3 s (`pg_dump` + `pg_restore`) |
 
 Memory stays flat at about 20–25 MB regardless of table size, because batches are
-streamed to disk rather than buffered. For reference, server-side
-`COPY ... TO STDOUT` on the same table takes 5.3 s — the practical floor for a
-client that has to receive, format and write every value.
+streamed rather than buffered. The floor is the same work done by PostgreSQL's own
+client tools against the same server and disk: a client still has to receive,
+format and write every value, so the floor is where each path is measured against.
 
 Practical notes:
 
-- **Raise `--batch-size` on a fast local network.** 50,000 is usually faster than
-  the default. Lower it on a high-latency link where a big batch risks a timeout.
-- **Import is slower than export.** Each row is a parameterised `INSERT`, batched
-  per transaction. Raise `--batch-size` for bulk loads into an empty table.
+- **Raise `--batch-size` on a fast local network.** 50,000 is usually a little
+  faster than the default. Lower it on a high-latency link where a big batch risks
+  a timeout.
+- **Import streams through `COPY`.** Each batch is one `COPY ... FROM STDIN`, so the
+  server parses the values with its own bulk input functions instead of executing a
+  statement per row. A file whose header does not match the table's columns falls
+  back to batched `INSERT`s, which is much slower but loads a subset of columns.
 - **`export dump` is the fastest way to move everything.** It uses `pg_dump` and
   `COPY`, and restores in parallel with `--format directory`.
 - **CSV export is for interchange, not backup.** It carries data only — no indexes,

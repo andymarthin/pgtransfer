@@ -3,7 +3,6 @@ package io
 import (
 	"database/sql"
 	"database/sql/driver"
-	"encoding/csv"
 	"fmt"
 	goio "io"
 	"os"
@@ -23,13 +22,11 @@ type CSVOptions struct {
 
 // DefaultBatchSize is the number of rows read or written per batch.
 //
-// It is deliberately much larger than the historical value of 500. Export used
-// to slice the table with LIMIT/OFFSET, where a small batch meant thousands of
-// round trips each rescanning the table from the start; that pattern is gone,
-// but a small batch is still costly because every batch is a separate query.
-// Measured on 5,000,000 rows: batch 500 took 15.3s, batch 20000 took 7.5s, with
-// a server-side COPY at 5.3s. 20000 rows is a few megabytes of CSV, so memory
-// stays flat while the per-batch overhead shrinks to something negligible.
+// A larger batch is cheaper because every batch is a separate query, and the
+// cost of a small one is very visible: measured on 5,000,000 rows, a batch of
+// 500 took 15.3 s and 20000 took 7.5 s, against 5.3 s for a server-side COPY.
+// 20000 rows is a few megabytes of CSV, so memory stays flat while the
+// per-batch overhead shrinks to something negligible.
 const DefaultBatchSize = 20000
 
 // CSVExtension is the suffix appended to an export path that has none.
@@ -196,7 +193,7 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 	}
 	defer file.Close()
 
-	writer := csv.NewWriter(file)
+	writer := newCSVWriter(file)
 	defer writer.Flush()
 
 	// Get column information
@@ -362,7 +359,7 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	}
 	defer file.Close()
 
-	reader := csv.NewReader(file)
+	reader := newCSVParser(file)
 
 	// Determine whether the first row holds column headers.
 	hasHeader := options.HasHeader
@@ -406,6 +403,20 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 
 	insertSQL := buildInsertSQL(table, headers)
 
+	// Choose the write path once. COPY streams the rows in one command and is
+	// roughly two orders of magnitude faster than one INSERT per row; INSERT
+	// remains for targets COPY cannot address, such as a table whose columns
+	// the CSV header does not match.
+	useCopy := copySupported(db)
+	if useCopy {
+		cols, err := copyColumnsForTable(db, table)
+		if err != nil || !headerMatchesColumns(headers, cols) {
+			useCopy = false
+		} else {
+			headers = cols
+		}
+	}
+
 	var imported int64
 	batch := make([][]string, 0, options.BatchSize)
 
@@ -415,7 +426,7 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 		if err == goio.EOF {
 			// Process final batch if any
 			if len(batch) > 0 {
-				if err := processBatch(db, insertSQL, batch, &imported, bar); err != nil {
+				if err := writeBatch(db, insertSQL, table, headers, batch, &imported, bar, useCopy); err != nil {
 					return err
 				}
 			}
@@ -429,7 +440,7 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 
 		// Process batch when it reaches the batch size
 		if len(batch) >= options.BatchSize {
-			if err := processBatch(db, insertSQL, batch, &imported, bar); err != nil {
+			if err := writeBatch(db, insertSQL, table, headers, batch, &imported, bar, useCopy); err != nil {
 				return err
 			}
 			batch = batch[:0] // Reset batch slice
@@ -450,9 +461,7 @@ func countCSVRows(path string, hasHeader bool) (int64, error) {
 	}
 	defer f.Close()
 
-	reader := csv.NewReader(f)
-	reader.FieldsPerRecord = -1 // ragged rows are validated on import, not here
-	reader.ReuseRecord = true
+	reader := newCSVParser(f)
 
 	var n int64
 	for {
@@ -679,6 +688,26 @@ func putFour(b []byte, v int) {
 	b[3] = byte('0' + v%10)
 }
 
+// writeBatch writes one batch using COPY when it is available and INSERT
+// otherwise, and advances the progress bar.
+//
+// COPY hands the whole batch to the server in one command, so the progress bar
+// is advanced by the batch rather than per row: the rows have already been read
+// and the server's report is not finer grained than the batch.
+func writeBatch(db *sql.DB, insertSQL, table string, header []string, batch [][]string, imported *int64, bar *Bar, useCopy bool) error {
+	if !useCopy {
+		return processBatch(db, insertSQL, batch, imported, bar)
+	}
+
+	if err := copyImport(db, table, header, batch); err != nil {
+		return err
+	}
+
+	*imported += int64(len(batch))
+	bar.Add(len(batch))
+	return nil
+}
+
 // processBatch handles the insertion of a batch of records
 func processBatch(db *sql.DB, insertSQL string, batch [][]string, imported *int64, bar *Bar) error {
 	tx, err := db.Begin()
@@ -737,7 +766,7 @@ func ExportCSVWithQuery(db *sql.DB, query, exportPath string, includeHeaders boo
 		return 0, fmt.Errorf("failed to get column names: %w", err)
 	}
 
-	writer := csv.NewWriter(file)
+	writer := newCSVWriter(file)
 	defer writer.Flush()
 
 	if includeHeaders {

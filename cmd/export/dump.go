@@ -14,6 +14,7 @@ var (
 	dumpOverwrite     bool
 	dumpFormat        string
 	dumpCompress      bool
+	dumpCompressLevel int
 	dumpSchemaOnly    bool
 	dumpDataOnly      bool
 	dumpTables        []string
@@ -78,7 +79,7 @@ func runDumpExport(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check if any advanced options are used
-	hasAdvancedOptions := dumpFormat != "" || dumpCompress || dumpSchemaOnly || dumpDataOnly ||
+	hasAdvancedOptions := dumpFormat != "" || dumpCompress || dumpCompressLevel > 0 || dumpSchemaOnly || dumpDataOnly ||
 		len(dumpTables) > 0 || len(dumpExcludeTables) > 0 || dumpSchema != "" ||
 		dumpVerbose || dumpTimeout > 0
 
@@ -88,6 +89,7 @@ func runDumpExport(cmd *cobra.Command, args []string) error {
 		options := &io.DumpOptions{
 			Format:        dumpFormat,
 			Compress:      dumpCompress,
+			CompressLevel: dumpCompressLevel,
 			SchemaOnly:    dumpSchemaOnly,
 			DataOnly:      dumpDataOnly,
 			Tables:        dumpTables,
@@ -127,6 +129,7 @@ func init() {
 	// Format and compression options
 	dumpCmd.Flags().StringVar(&dumpFormat, "format", "", "Output format: plain, custom, directory, tar (default: plain)")
 	dumpCmd.Flags().BoolVar(&dumpCompress, "compress", false, "Enable compression (not available for plain format)")
+	dumpCmd.Flags().IntVar(&dumpCompressLevel, "compress-level", 0, "Compression level 1-9 for an archive format (default 1)")
 
 	// Content filtering options
 	dumpCmd.Flags().BoolVar(&dumpSchemaOnly, "schema-only", false, "Export schema only (no data)")
