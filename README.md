@@ -1326,10 +1326,12 @@ Benchmarks never touch a database: the query layer is I/O bound and is covered
 by the integration tests, while these benchmarks isolate the CPU cost that a
 change to formatting or encoding would actually affect.
 
-CI runs the benchmarks on every push and pull request, but only to keep them
-compiling — shared runners are too noisy to assert on timing. The results are
-uploaded as the `benchmarks` artifact for manual comparison against a baseline
-recorded on your own machine.
+They are **not run in CI**. Shared runners are too noisy for timing to mean
+anything, and a benchmark job would assert nothing useful while adding minutes to
+every pull request; the `unit` job's `go vet` already compiles the benchmark
+files, so one that stops building still fails CI. Run them locally, and compare
+against a baseline with `make bench-save` / `make bench-compare`, when you are
+actually changing the code they cover.
 
 ## 🔒 Security Features
 

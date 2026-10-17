@@ -55,33 +55,6 @@ jobs:
           path: coverage.out
           if-no-files-found: ignore
 
-  benchmark:
-    name: Benchmarks
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: '1.25'
-          cache: true
-
-      # Benchmarks do not assert thresholds: shared CI runners are too noisy for
-      # stable numbers. They run so that every benchmark still compiles, and the
-      # results are published as an artifact for manual comparison.
-      - name: Run benchmarks
-        run: |
-          go test -run '^$' -bench . -benchmem -count=3 ./... | tee bench.txt
-
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v7
-        with:
-          name: benchmarks
-          path: bench.txt
-          if-no-files-found: ignore
-
   # ---------------------------------------------------------------------------
   # Integration tests against a real PostgreSQL server and SSH tunnel.
   # ---------------------------------------------------------------------------
