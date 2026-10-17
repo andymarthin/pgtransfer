@@ -1,7 +1,6 @@
 package io
 
 import (
-	"bufio"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/csv"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/andymarthin/pgtransfer/internal/utils"
-	"github.com/schollz/progressbar/v3"
 )
 
 // CSVOptions contains configuration for CSV operations
@@ -34,12 +32,28 @@ type CSVOptions struct {
 // stays flat while the per-batch overhead shrinks to something negligible.
 const DefaultBatchSize = 20000
 
+// CSVExtension is the suffix appended to an export path that has none.
+const CSVExtension = ".csv"
+
 // DefaultCSVOptions returns default CSV configuration
 func DefaultCSVOptions() *CSVOptions {
 	return &CSVOptions{
 		BatchSize: DefaultBatchSize,
 		HasHeader: true,
 	}
+}
+
+// CSVOutputPath returns the path an export will actually write.
+//
+// Export appends ".csv" when the caller omits an extension. Callers that check
+// whether they are about to overwrite a file must resolve the path the same
+// way, otherwise "pgtransfer export csv prod users users" checks for a file
+// called "users" and silently writes "users.csv" over an existing one.
+func CSVOutputPath(path string) string {
+	if strings.HasSuffix(path, CSVExtension) {
+		return path
+	}
+	return path + CSVExtension
 }
 
 // formatCSVValue properly formats a value for CSV export
@@ -151,23 +165,25 @@ func FormatCSVValue(v interface{}) string {
 	}
 }
 
-// ExportCSV streams a PostgreSQL table to a CSV file with a live progress bar.
+// ExportCSV exports a PostgreSQL table to a CSV file with a live progress bar.
+//
+// Kept for callers that only need the defaults; it shares the implementation
+// with ExportCSVWithOptions so the two cannot diverge.
 func ExportCSV(db *sql.DB, table, exportPath string) error {
-	start := time.Now()
+	options := DefaultCSVOptions()
 
-	if !strings.HasSuffix(exportPath, ".csv") {
-		exportPath += ".csv"
-	}
+	start := time.Now()
+	exportPath = CSVOutputPath(exportPath)
 
 	if err := os.MkdirAll(filepath.Dir(exportPath), 0755); err != nil {
 		return fmt.Errorf("failed to create export directory: %w", err)
 	}
 
-	utils.PrintInfo(nil, "Starting export of table '%s'...", table)
+	utils.PrintInfo(nil, "Exporting table '%s'...", table)
 
 	// Count total rows for progress tracking
 	var total int64
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", quoteTable(table))
 	if err := db.QueryRow(countQuery).Scan(&total); err != nil {
 		total = -1 // fallback if counting fails
 	}
@@ -193,11 +209,14 @@ func ExportCSV(db *sql.DB, table, exportPath string) error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	if err := writer.Write(cols); err != nil {
-		return fmt.Errorf("failed to write CSV header: %w", err)
+	if options.HasHeader {
+		if err := writer.Write(cols); err != nil {
+			return fmt.Errorf("failed to write CSV header: %w", err)
+		}
 	}
 
 	bar := NewProgressBarWithTimer(total, fmt.Sprintf("Exporting %s", table))
+	defer bar.Finish()
 
 	values := make([]interface{}, len(cols))
 	valuePtrs := make([]interface{}, len(cols))
@@ -222,6 +241,13 @@ func ExportCSV(db *sql.DB, table, exportPath string) error {
 		written++
 		bar.Add(1)
 	}
+	// A driver can stop iterating because the connection failed, because the
+	// server cancelled the query or because a value could not be converted.
+	// Next() returning false covers all of those as well as a clean end, so the
+	// error must be checked or a truncated export looks like a complete one.
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error reading rows: %w", err)
+	}
 
 	writer.Flush()
 	if err := writer.Error(); err != nil {
@@ -239,12 +265,13 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 	if options == nil {
 		options = DefaultCSVOptions()
 	}
+	if options.BatchSize <= 0 {
+		options.BatchSize = DefaultBatchSize
+	}
 
 	start := time.Now()
 
-	if !strings.HasSuffix(exportPath, ".csv") {
-		exportPath += ".csv"
-	}
+	exportPath = CSVOutputPath(exportPath)
 	if err := os.MkdirAll(filepath.Dir(exportPath), 0755); err != nil {
 		return fmt.Errorf("failed to create export directory: %w", err)
 	}
@@ -253,7 +280,7 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 
 	// Count total rows for progress tracking
 	var total int64
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", quoteTable(table))
 	if err := db.QueryRow(countQuery).Scan(&total); err != nil {
 		total = -1 // fallback if counting fails
 	}
@@ -289,6 +316,7 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 	}
 
 	bar := NewProgressBarWithTimer(total, fmt.Sprintf("Exporting %s", table))
+	defer bar.Finish()
 
 	var written int64
 	offset := int64(0)
@@ -368,10 +396,22 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 			batchCount++
 			bar.Add(1)
 		}
-
+		// A batch that ends early because of a driver error must not be read as
+		// the end of the table.
+		batchErr := batchRows.Err()
 		batchRows.Close()
+		if batchErr != nil {
+			return fmt.Errorf("error reading batch: %w", batchErr)
+		}
 
-		// If we got fewer rows than batch size, we're done
+		// A short batch is the last batch only when the query returned fewer
+		// rows than it asked for and did not report an error. A batch of zero
+		// rows also stops the loop, which the previous "fewer than batch size"
+		// test did implicitly; an empty table now exits on the first pass
+		// instead of running a second query for nothing.
+		if batchCount == 0 {
+			break
+		}
 		if batchCount < options.BatchSize {
 			break
 		}
@@ -400,69 +440,19 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 
 // ImportCSV imports data from a CSV file into a PostgreSQL table.
 func ImportCSV(db *sql.DB, table, importPath string) error {
-	start := time.Now()
-
-	utils.PrintInfo(nil, "Starting import from %s into table '%s'...", importPath, table)
-
-	file, err := os.Open(importPath)
-	if err != nil {
-		return fmt.Errorf("failed to open CSV: %w", err)
-	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		return fmt.Errorf("failed to read CSV: %w", err)
-	}
-
-	if len(records) < 2 {
-		return fmt.Errorf("no data rows found in %s", importPath)
-	}
-
-	headers := records[0]
-	bar := NewProgressBarWithTimer(int64(len(records)-1), fmt.Sprintf("Importing %s", table))
-
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to start transaction: %w", err)
-	}
-
-	insertSQL := buildInsertSQL(table, headers)
-
-	stmt, err := tx.Prepare(insertSQL)
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
-
-	for i, row := range records[1:] {
-		args := make([]interface{}, len(row))
-		for j, v := range row {
-			args[j] = v
-		}
-		if _, err := stmt.Exec(args...); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("insert failed on row %d: %w", i+1, err)
-		}
-		bar.Add(1)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit failed: %w", err)
-	}
-
-	duration := time.Since(start)
-	utils.PrintSuccess(nil, "✅ Imported %d rows from %s", len(records)-1, importPath)
-	utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
-	return nil
+	return ImportCSVWithOptions(db, table, importPath, &CSVOptions{
+		BatchSize: DefaultBatchSize,
+		HasHeader: true,
+	})
 }
 
 // ImportCSVWithOptions imports data from a CSV file with batch processing for better performance
 func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOptions) error {
 	if options == nil {
 		options = DefaultCSVOptions()
+	}
+	if options.BatchSize <= 0 {
+		options.BatchSize = DefaultBatchSize
 	}
 
 	start := time.Now()
@@ -478,7 +468,7 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	reader := csv.NewReader(file)
 
 	// Determine whether the first row holds column headers.
-	hasHeader := options == nil || options.HasHeader
+	hasHeader := options.HasHeader
 
 	var headers []string
 	if hasHeader {
@@ -488,21 +478,15 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 		}
 	}
 
-	// Count total rows for progress tracking
-	tempFile, err := os.Open(importPath)
+	// Count total rows for progress tracking.
+	//
+	// Counted by re-reading the file in chunks rather than with ReadAll: a
+	// large export is hundreds of megabytes, and materialising every record as
+	// a []string costs several times the file size in memory just to display a
+	// progress bar.
+	totalRows, err := countCSVRows(importPath, hasHeader)
 	if err != nil {
-		return fmt.Errorf("failed to open CSV for counting: %w", err)
-	}
-	tempReader := csv.NewReader(tempFile)
-	records, err := tempReader.ReadAll()
-	tempFile.Close()
-	if err != nil {
-		return fmt.Errorf("failed to count CSV rows: %w", err)
-	}
-
-	totalRows := int64(len(records))
-	if hasHeader {
-		totalRows-- // Exclude header
+		return err
 	}
 	if totalRows <= 0 {
 		return fmt.Errorf("no data rows found in %s", importPath)
@@ -521,6 +505,7 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	}
 
 	bar := NewProgressBarWithTimer(totalRows, fmt.Sprintf("Importing %s", table))
+	defer bar.Finish()
 
 	insertSQL := buildInsertSQL(table, headers)
 
@@ -558,6 +543,35 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	utils.PrintSuccess(nil, "✅ Imported %d rows from %s (batch size: %d)", imported, importPath, options.BatchSize)
 	utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
 	return nil
+}
+
+// countCSVRows counts the data records in a CSV file by streaming it.
+func countCSVRows(path string, hasHeader bool) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open CSV for counting: %w", err)
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	reader.FieldsPerRecord = -1 // ragged rows are validated on import, not here
+	reader.ReuseRecord = true
+
+	var n int64
+	for {
+		_, err := reader.Read()
+		if err == goio.EOF {
+			break
+		}
+		if err != nil {
+			return 0, fmt.Errorf("failed to count CSV rows: %w", err)
+		}
+		n++
+	}
+	if hasHeader && n > 0 {
+		n--
+	}
+	return n, nil
 }
 
 // nullableValue maps an empty CSV field to SQL NULL.
@@ -609,6 +623,9 @@ func tableColumns(db *sql.DB, table string) ([]string, error) {
 	cols, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read columns for '%s': %w", table, err)
+	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("table '%s' has no columns", table)
 	}
 	return cols, nil
 }
@@ -766,7 +783,7 @@ func putFour(b []byte, v int) {
 }
 
 // processBatch handles the insertion of a batch of records
-func processBatch(db *sql.DB, insertSQL string, batch [][]string, imported *int64, bar *progressbar.ProgressBar) error {
+func processBatch(db *sql.DB, insertSQL string, batch [][]string, imported *int64, bar *Bar) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
@@ -862,23 +879,19 @@ func ExportCSVWithQuery(db *sql.DB, query, exportPath string, includeHeaders boo
 	return count, nil
 }
 
-// CountCSVDataRows best-effort counts data rows in a CSV file, optionally
+// CountCSVDataRows best-effort counts records in a CSV file, optionally
 // excluding the header row.
+//
+// This counts records rather than lines. A CSV record can span several lines
+// when a quoted field contains a newline, so counting newline bytes overstates
+// the row count for any table with multiline text in it.
 func CountCSVDataRows(path string, hasHeader bool) int {
-	f, err := os.Open(path)
+	n, err := countCSVRows(path, hasHeader)
 	if err != nil {
 		return 0
 	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	n := 0
-	for sc.Scan() {
-		n++
+	if n < 0 {
+		return 0
 	}
-	if hasHeader && n > 0 {
-		n--
-	}
-	return n
+	return int(n)
 }

@@ -22,6 +22,7 @@ var (
 	migrateVerbose        bool
 	migrateTimeout        int
 	migrateOverwrite      bool
+	migrateStrict         bool
 	migrateBatchSize      int
 
 	// Database override options
@@ -191,6 +192,7 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 		Verbose:        migrateVerbose,
 		Timeout:        migrateTimeout,
 		Overwrite:      migrateOverwrite,
+		Strict:         migrateStrict,
 		BatchSize:      migrateBatchSize,
 	}
 
@@ -239,6 +241,7 @@ func init() {
 	databaseCmd.Flags().BoolVar(&migrateValidate, "validate", false, "Validate migration before execution")
 	databaseCmd.Flags().BoolVar(&migrateEnableRollback, "enable-rollback", false, "Enable rollback support (creates backup)")
 	databaseCmd.Flags().BoolVar(&migrateOverwrite, "overwrite", false, "Overwrite existing data in target database")
+	databaseCmd.Flags().BoolVar(&migrateStrict, "strict", false, "Abort the migration on the first restore error")
 
 	// Performance and output
 	databaseCmd.Flags().BoolVar(&migrateVerbose, "verbose", false, "Enable verbose output")

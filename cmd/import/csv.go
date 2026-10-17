@@ -33,14 +33,14 @@ Batch processing helps with memory efficiency and performance when dealing with 
 	Example: `  # Import CSV file into table (uses public schema by default)
   pgtransfer import csv myprofile users users.csv
 
+  # Import a header-less file: columns are matched by position
+  pgtransfer import csv myprofile users users.csv --headers=false
+
   # Import with explicit schema
   pgtransfer import csv myprofile users users.csv --schema myschema
 
   # Import using schema.table format
   pgtransfer import csv myprofile public.users users.csv
-
-  # Import with headers (first row contains column names)
-  pgtransfer import csv myprofile customers customers.csv --headers
 
   # Import with custom batch size (default: 20000)
   pgtransfer import csv myprofile products products.csv --batch-size 50000
@@ -142,7 +142,7 @@ func runCSVImport(cmd *cobra.Command, args []string) error {
 
 func init() {
 	csvCmd.Flags().BoolVar(&csvOverwrite, "overwrite", false, "Truncate table before importing (removes all existing data)")
-	csvCmd.Flags().BoolVar(&csvHeaders, "headers", false, "First row contains column headers")
+	csvCmd.Flags().BoolVar(&csvHeaders, "headers", true, "First row contains column headers (use --headers=false for a header-less file)")
 	csvCmd.Flags().IntVar(&csvBatchSize, "batch-size", 20000, "Number of rows to process in each batch")
 	csvCmd.Flags().StringVar(&csvSchema, "schema", "", "Database schema name (default: 'public')")
 }

@@ -96,7 +96,13 @@ func runCSVExport(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Check if output file exists and handle overwrite
+	// Check the path the export will actually write. Export appends ".csv" when
+	// the caller omits an extension, so guarding the raw argument would miss an
+	// existing "users.csv" when the user typed "users" and silently replace it.
+	// The resolved path is carried forward so the message and the write agree.
+	if csvQuery == "" {
+		outputFile = io.CSVOutputPath(outputFile)
+	}
 	if _, err := os.Stat(outputFile); err == nil && !csvOverwrite {
 		return fmt.Errorf("output file '%s' already exists. Use --overwrite to replace it", outputFile)
 	}
@@ -272,7 +278,7 @@ func exportCSVWithQuery(db *sql.DB, query, outputFile string, includeHeaders boo
 func init() {
 	csvCmd.Flags().BoolVar(&csvOverwrite, "overwrite", false, "Overwrite output file if it exists")
 	csvCmd.Flags().StringVar(&csvQuery, "query", "", "Custom SQL query to execute")
-	csvCmd.Flags().BoolVar(&csvHeaders, "headers", false, "Include column headers in CSV output")
+	csvCmd.Flags().BoolVar(&csvHeaders, "headers", true, "Include column headers in CSV output (use --headers=false to omit them)")
 	csvCmd.Flags().IntVar(&csvBatchSize, "batch-size", 20000, "Number of rows to process in each batch")
 	csvCmd.Flags().StringVar(&csvSchema, "schema", "", "Database schema name (default: 'public')")
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	goio "io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,9 +62,11 @@ func DumpDatabase(dbURL, dumpPath string) error {
 	cmd.Stderr = os.Stderr
 
 	bar := NewProgressBarWithTimer(0, fmt.Sprintf("Dumping database to %s", dumpPath))
+	defer bar.Finish()
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start pg_dump: %w", err)
+		outFile.Close()
+		return removeOnFailure(dumpPath, fmt.Errorf("failed to start pg_dump: %w", err))
 	}
 
 	done := make(chan error, 1)
@@ -77,9 +80,16 @@ func DumpDatabase(dbURL, dumpPath string) error {
 		select {
 		case err := <-done:
 			if err != nil {
-				return fmt.Errorf("pg_dump failed: %w", err)
+				outFile.Close()
+				return removeOnFailure(dumpPath, fmt.Errorf("pg_dump failed: %w", err))
 			}
-			bar.Finish()
+			if err := syncFile(outFile); err != nil {
+				outFile.Close()
+				return removeOnFailure(dumpPath, err)
+			}
+			if err := outFile.Close(); err != nil {
+				return removeOnFailure(dumpPath, fmt.Errorf("failed to close %s: %w", dumpPath, err))
+			}
 			duration := time.Since(start)
 			utils.PrintSuccess(nil, "✅ Database dumped successfully to %s", dumpPath)
 			utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
@@ -152,7 +162,7 @@ func DumpDatabaseWithOptions(dbURL, dumpPath string, options *DumpOptions) error
 
 	utils.PrintInfo(nil, "Starting PostgreSQL dump with advanced options...")
 	if options.Verbose {
-		utils.PrintInfo(nil, "Command: pg_dump %s", strings.Join(args, " "))
+		utils.PrintInfo(nil, "Command: pg_dump %s", strings.Join(redactArgs(args), " "))
 	}
 
 	cmd := exec.Command("pg_dump", args...)
@@ -197,6 +207,48 @@ func DumpDatabaseWithOptions(dbURL, dumpPath string, options *DumpOptions) error
 			return fmt.Errorf("dump operation timed out after %d seconds", options.Timeout)
 		}
 	}
+}
+
+// redactDSNURL removes the password from a connection URL so that it can be
+// printed. The URL is the last pg_dump argument, and --verbose prints the whole
+// argument list: the database password of the profile would otherwise be
+// written to the terminal and to any log the caller redirects into.
+//
+// Anything that does not parse as a URL is redacted textually, because an
+// unparseable string is exactly the case where a password is most likely to
+// survive a naive rewrite.
+func redactDSNURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		if at := strings.LastIndex(raw, "@"); at > 0 {
+			if scheme := strings.Index(raw, "://"); scheme >= 0 && scheme < at {
+				return raw[:scheme+3] + "***@" + raw[at+1:]
+			}
+		}
+		return raw
+	}
+	if u.User != nil {
+		if _, hasPassword := u.User.Password(); hasPassword {
+			u.User = url.UserPassword(u.User.Username(), "***")
+		}
+	}
+	// url.URL.String would re-encode the *** placeholder; the marker is
+	// deliberate, not data.
+	return strings.Replace(u.String(), "%2A%2A%2A", "***", -1)
+}
+
+// redactArgs returns a copy of a command's arguments with any connection URL
+// password removed, for printing.
+func redactArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		if strings.Contains(a, "://") && strings.Contains(a, "@") {
+			out[i] = redactDSNURL(a)
+			continue
+		}
+		out[i] = a
+	}
+	return out
 }
 
 // normalizeDumpPath adjusts the dump file extension to match the requested
@@ -593,6 +645,46 @@ func classifyRestoreLine(line string) restoreLineKind {
 	return restoreLineError
 }
 
+// syncFile flushes a written file to stable storage.
+//
+// A dump is read back by pg_restore or shipped to another machine, and a
+// reported success that is still sitting in the page cache can be lost by a
+// crash. Sync reports that failure instead of leaving the caller to discover a
+// truncated file later.
+func syncFile(f *os.File) error {
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("failed to flush %s: %w", f.Name(), err)
+	}
+	return nil
+}
+
+// removeOnFailure deletes a partially written dump file.
+//
+// pg_dump writes to a path the caller then restores or ships. If it is killed
+// halfway the file exists and looks like a backup, so a later restore reads a
+// truncated archive and reports whatever error that produces — usually one that
+// blames the restore rather than the dump that never finished.
+// syncPath flushes a file that another process wrote, by opening it and
+// syncing the handle.
+func syncPath(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open %s for flushing: %w", path, err)
+	}
+	defer f.Close()
+	return syncFile(f)
+}
+
+func removeOnFailure(path string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+		return fmt.Errorf("%w (also failed to remove partial dump %s: %v)", err, path, removeErr)
+	}
+	return fmt.Errorf("%w (partial dump %s removed)", err, path)
+}
+
 func commandExists(cmd string) bool {
 	path, err := exec.LookPath(cmd)
 	return err == nil && path != ""
@@ -659,9 +751,11 @@ func executePgDump(dbURL, dumpPath string, start time.Time, options *DumpOptions
 	cmd.Stderr = os.Stderr
 
 	bar := NewProgressBarWithTimer(0, fmt.Sprintf("Dumping database to %s", dumpPath))
+	defer bar.Finish()
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start pg_dump: %w", err)
+		outFile.Close()
+		return removeOnFailure(dumpPath, fmt.Errorf("failed to start pg_dump: %w", err))
 	}
 
 	done := make(chan error, 1)
@@ -675,9 +769,16 @@ func executePgDump(dbURL, dumpPath string, start time.Time, options *DumpOptions
 		select {
 		case err := <-done:
 			if err != nil {
-				return fmt.Errorf("pg_dump failed: %w", err)
+				outFile.Close()
+				return removeOnFailure(dumpPath, fmt.Errorf("pg_dump failed: %w", err))
 			}
-			bar.Finish()
+			if err := syncFile(outFile); err != nil {
+				outFile.Close()
+				return removeOnFailure(dumpPath, err)
+			}
+			if err := outFile.Close(); err != nil {
+				return removeOnFailure(dumpPath, fmt.Errorf("failed to close %s: %w", dumpPath, err))
+			}
 			duration := time.Since(start)
 			utils.PrintSuccess(nil, "✅ Database dumped successfully to %s", dumpPath)
 			utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
@@ -739,7 +840,7 @@ func executePgDumpWithOptions(dbURL, dumpPath string, options *DumpOptions, star
 
 	utils.PrintInfo(nil, "Starting PostgreSQL dump with advanced options...")
 	if options.Verbose {
-		utils.PrintInfo(nil, "Command: pg_dump %s", strings.Join(args, " "))
+		utils.PrintInfo(nil, "Command: pg_dump %s", strings.Join(redactArgs(args), " "))
 	}
 
 	// Create output directory if needed.
@@ -752,9 +853,10 @@ func executePgDumpWithOptions(dbURL, dumpPath string, options *DumpOptions, star
 	cmd.Stderr = os.Stderr
 
 	bar := NewProgressBarWithTimer(0, fmt.Sprintf("Dumping database to %s", dumpPath))
+	defer bar.Finish()
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start pg_dump: %w", err)
+		return removeOnFailure(dumpPath, fmt.Errorf("failed to start pg_dump: %w", err))
 	}
 
 	done := make(chan error, 1)
@@ -775,9 +877,13 @@ func executePgDumpWithOptions(dbURL, dumpPath string, options *DumpOptions, star
 		select {
 		case err := <-done:
 			if err != nil {
-				return fmt.Errorf("pg_dump failed: %w", err)
+				return removeOnFailure(dumpPath, fmt.Errorf("pg_dump failed: %w", err))
 			}
-			bar.Finish()
+			// pg_dump wrote the file itself (--file), so flush it through a
+			// handle of our own before reporting success.
+			if err := syncPath(dumpPath); err != nil {
+				return removeOnFailure(dumpPath, err)
+			}
 			duration := time.Since(start)
 			utils.PrintSuccess(nil, "✅ Database dumped successfully to %s", dumpPath)
 			utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
@@ -786,7 +892,8 @@ func executePgDumpWithOptions(dbURL, dumpPath string, options *DumpOptions, star
 			if err := cmd.Process.Kill(); err != nil {
 				utils.PrintError(nil, "Failed to kill timed out process: %v", err)
 			}
-			return fmt.Errorf("pg_dump timed out after %d seconds", options.Timeout)
+			<-done
+			return removeOnFailure(dumpPath, fmt.Errorf("pg_dump timed out after %d seconds", options.Timeout))
 		case <-ticker.C:
 			bar.Add(1) // Advances the spinner animation
 		}

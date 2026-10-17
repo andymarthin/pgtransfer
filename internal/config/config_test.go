@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,6 +190,82 @@ func TestBuildDSN_ExplicitPort(t *testing.T) {
 	p := Profile{User: "u", Password: "p", Host: "h", Port: 6543, Database: "d"}
 	if got := BuildDSN(p); !strings.Contains(got, "@h:6543/d") {
 		t.Fatalf("expected explicit port 6543, got %q", got)
+	}
+}
+
+// TestBuildDSN_SpaceInPasswordRoundTrips pins the encoding that a "+" would
+// break: lib/pq reads the userinfo block with path semantics, where "+" is a
+// literal plus rather than an encoded space.
+func TestBuildDSN_SpaceInPasswordRoundTrips(t *testing.T) {
+	p := Profile{
+		User:     "app user",
+		Password: "pass word with spaces",
+		Host:     "localhost",
+		Port:     5432,
+		Database: "myapp",
+		SSLMode:  "disable",
+	}
+
+	got := BuildDSN(p)
+	if strings.Contains(got, "+") {
+		t.Fatalf("BuildDSN() encoded a space as '+', which lib/pq reads literally: %q", got)
+	}
+
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("url.Parse(%q): %v", got, err)
+	}
+	password, _ := u.User.Password()
+	if password != p.Password {
+		t.Errorf("password round-tripped as %q, want %q", password, p.Password)
+	}
+	if u.User.Username() != p.User {
+		t.Errorf("user round-tripped as %q, want %q", u.User.Username(), p.User)
+	}
+	if strings.TrimPrefix(u.Path, "/") != p.Database {
+		t.Errorf("database round-tripped as %q, want %q", u.Path, p.Database)
+	}
+}
+
+// TestBuildDSN_SpecialCharactersRoundTrip covers the characters that would
+// otherwise terminate the URL early.
+func TestBuildDSN_SpecialCharactersRoundTrip(t *testing.T) {
+	cases := []string{
+		"p@ssword",
+		"pa:ss",
+		"pa/ss",
+		"pa?ss",
+		"pa#ss",
+		"pa%ss",
+		"pa&ss=1",
+		"pässwörd",
+		"a b  c",
+	}
+	for _, password := range cases {
+		t.Run(password, func(t *testing.T) {
+			p := Profile{User: "u", Password: password, Host: "h", Port: 5432, Database: "d"}
+			u, err := url.Parse(BuildDSN(p))
+			if err != nil {
+				t.Fatalf("url.Parse: %v", err)
+			}
+			got, _ := u.User.Password()
+			if got != password {
+				t.Errorf("password round-tripped as %q, want %q", got, password)
+			}
+		})
+	}
+}
+
+// TestBuildDSN_BracketsIPv6Host keeps an IPv6 literal from being read as a
+// host whose port is its second group.
+func TestBuildDSN_BracketsIPv6Host(t *testing.T) {
+	p := Profile{User: "u", Password: "p", Host: "2001:db8::1", Port: 5432, Database: "d"}
+	got := BuildDSN(p)
+	if !strings.Contains(got, "@[2001:db8::1]:5432/") {
+		t.Fatalf("IPv6 host not bracketed: %q", got)
+	}
+	if u, err := url.Parse(got); err != nil || u.Hostname() != "2001:db8::1" {
+		t.Fatalf("url.Parse gave host %q (err %v), want 2001:db8::1", u.Hostname(), err)
 	}
 }
 
