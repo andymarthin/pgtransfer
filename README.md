@@ -864,24 +864,41 @@ PGTransfer is designed for efficient data operations with intelligent batch proc
 ### Performance Features
 
 - **🔄 Streaming Processing**: Handles datasets larger than available memory
-- **🧠 Adaptive Batching**: Adjusts batch sizes dynamically based on data complexity
+- **🎯 Key-Based Pagination**: Exports page through the table by primary key, so results are complete and ordering is deterministic
 - **⚡ Connection Pooling**: Reuses database connections efficiently
 - **📊 Real-time Metrics**: Provides live performance monitoring with time estimates
 - **💾 Memory Efficiency**: Maintains minimal memory usage regardless of dataset size
 
 ### Batch Size Optimization
 
-**Default batch size: 1000 rows** - works well for most environments and use cases.
+**Default batch size: 20,000 rows.** Each batch is one query, so a small batch
+adds a round trip per few hundred rows. Export used to slice the table with
+`LIMIT/OFFSET`, which made small batches expensive; the export is now paginated
+on the primary key, so batches are cheap and linear, but a larger batch still
+removes per-query overhead.
 
-#### Performance Benchmarks (1M Records, Mixed Data Types)
+#### Measured Export Performance (5,000,000 rows, 8 columns)
 
-| Batch Size | Throughput | Memory Usage | Best For |
-|------------|------------|--------------|----------|
-| 500        | 4,200 rec/sec | 35MB | Memory-constrained systems |
-| 1,000 (default) | 6,800 rec/sec | 65MB | ✅ **Optimal for most cases** |
-| 5,000      | 8,500 rec/sec | 180MB | High-performance networks |
-| 10,000     | 9,200 rec/sec | 320MB | Maximum throughput scenarios |
-| 25,000     | 8,800 rec/sec | 750MB | Dedicated database servers |
+Same machine, same table, PostgreSQL 15. Measured with `make bench` and real
+exports — see [BENCHMARKS.md](BENCHMARKS.md) for the full methodology.
+
+| Batch size | Time | Throughput |
+|------------|------|------------|
+| 500 | 15.3 s | ~327,000 rows/s |
+| 20,000 (default) | **9.8 s** | ~510,000 rows/s |
+| — | — | — |
+| *server-side `COPY TO STDOUT` (reference floor)* | *5.3 s* | *~949,000 rows/s* |
+
+Memory stays flat at roughly 20-25 MB regardless of table size, because batches
+are streamed to disk rather than buffered.
+
+Export scales linearly with row count at the default settings:
+
+| Rows | Time |
+|------|------|
+| 1,000,000 | 3.6 s |
+| 5,000,000 | 9.8 s |
+| 10,000,000 | 17.0 s |
 
 ### Production Examples
 
