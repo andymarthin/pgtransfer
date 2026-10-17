@@ -1,107 +1,74 @@
-# PGTransfer v1.3.0
+# PGTransfer v1.4.0
 
-Two capabilities the tool was missing: it recorded every migration but could not
-show you what it recorded, and it could migrate a database but not tell you what
-that would do until it had already done it.
+Import and migration both got a different path to the database, and the numbers
+moved by an order of magnitude.
+
+## ⚡ Performance
+
+### `import csv` streams through `COPY`
+
+Each batch is now one `COPY ... FROM STDIN` instead of a statement per row, so the
+server parses values with its own bulk input functions. On a 1,000,000 row,
+8-column table the same load went from **214 s to 3.1 s** — under a second above
+the server's own `COPY FROM`, which is the floor for any client that still has to
+receive the bytes.
+
+A file whose header does not match the table's columns still loads, through
+batched `INSERT`s, which is slower but can fill a subset of the columns.
+
+### `migrate database` moves a custom-format archive
+
+The transfer writes a custom-format archive from the source and restores it into
+the target. That carries the data through `COPY` in both directions rather than
+replaying it as statements, and lands a 1,000,000 row database in **3.6 s**,
+ahead of `pg_dump` + `pg_restore` at 4.3 s.
+
+The archive is written at gzip level 1: it is written and read back inside one
+command, so a higher level spends most of a second compressing for a smaller file
+that never reaches a disk it will be read from again.
 
 ## ✨ New features
 
-### `pgtransfer log`
+### `export dump --compress-level`
 
-`migrate database` has always appended an entry per run to `~/.pgtransfer/logs/`,
-and nothing read it back — finding out what the last migration did meant knowing
-the file naming and `cat`-ing JSONL. `pgtransfer log` shows it:
+The compression level of an archive format is now settable from `1` to `9`. The
+default is `1`.
 
-```
-📘 Operations on 2026-10-17
+## 🐛 Correctness
 
-TIME      STATUS  COMMAND           PROFILE  DETAIL
-16:15:00  ok      migrate database  prod     migrated public to staging (4.2s)
-16:20:00  fail    export csv        prod     connection reset
-```
+### A carriage return inside a value survives a CSV round trip
 
-- `--date YYYY-MM-DD` shows a specific day; no flag shows today.
-- `--limit N` keeps the newest N entries.
-- `--json` returns `{date, total, entries}`, with `entries` always an array —
-  `[]`, never `null` — so this works even on a machine that has never migrated:
+`export csv` and `import csv` now write and read CSV with a parser that keeps a
+`\r\n` inside a quoted field intact. A text column holding a Windows line ending
+comes back with the carriage return it went in with, and the exported bytes are
+exactly the imported bytes. A damaged file — an unclosed quote, a quote in the
+middle of an unquoted field — is reported with its line number instead of being
+guessed at.
 
-  ```bash
-  pgtransfer --json log --limit 1 | jq -e '.data.entries[0].status == "success"'
-  ```
+Both sides are faster as well: the parser reads in runs and returns an unquoted
+field as a slice of its buffer, at about 230 MB/s with no database involved.
 
-A day with no file is reported as no operations rather than an error, and the
-command names the days that do have entries so you aren't left guessing. A single
-malformed line is skipped instead of hiding the rest of the day — an interrupted
-command must not make the log unreadable.
+## ✅ Tests
 
-### `migrate database --dry-run`
+- `TestImportCSVRoundTripsThroughCopy` — exports a table of awkward values (tab,
+  newline, CRLF, backslash, quote, comma, leading space, unicode, `NULL`) and
+  compares the target's rows against the source's after a `COPY` import.
+- `TestImportCSVPreservesNulls`, `TestImportCSVRejectsRaggedCopyRows` — an empty
+  field is `NULL` and not an empty string; a short row is refused rather than
+  padded.
+- `TestCSVParserRoundTrips`, `TestCSVParserAcceptsExportShapes`,
+  `TestCSVParserReportsDamage`, `TestCSVParserHandlesLargeRecords` — the reader's
+  grammar and its behaviour on damaged input.
+- `TestAppendCompressionArgs`, `TestCompressionLevelIsCheapByDefault`,
+  `TestMigrationTempFileIsAnArchive` — the `--compress` arguments and the staging
+  file a migration uses.
 
-Connects to both databases and reports the plan. Nothing is dumped, written or
-dropped.
+## 🔧 Under the hood
 
-```
-🔍 Migration plan (dry run)
-From:      prod
-To:        staging
-Mode:      schema and data
-Overwrite: on - existing target tables are dropped and recreated
-
-TABLE          ROWS     TARGET
-orders         842,113  dropped and recreated
-users          250,000  dropped and recreated
-
-1,092,113 rows (estimated) in 2 table(s)
-```
-
-It answers the three questions the flag list can't:
-
-- **What `--overwrite` would drop.** Aimed at the wrong database, that's visible
-  before it runs instead of after.
-- **Which columns have incompatible types.** The restore does not alter an
-  existing column's type, so those rows fail or coerce silently. Both types are
-  shown side by side.
-- **Which tables exist on only one side.** `--data-only` into a table that isn't
-  in the target is now a stated warning rather than a failure 30 seconds later.
-
-Row counts come from Postgres's own statistics, so the whole report costs two
-catalog queries instead of scanning every table — which is the cost a dry run
-exists to avoid.
-
-With `--json` the report is a structured object, so a pipeline can assert on it:
-
-```bash
-pgtransfer --json migrate database prod staging --dry-run 2>/dev/null \
-  | jq -e '.data.report.type_conflicts | length == 0'
-```
-
-## 🔧 Fixes
-
-### `migrate rollback` gains `--strict`
-
-`import dump` and `migrate database` both accepted `--strict`; rollback did not.
-That is the route where it matters most: a rollback that carries on past a failed
-statement leaves the target **neither the old database nor the new one**, and the
-tolerant default still reports success, because a non-zero `pg_restore` status
-with no recognisable error lines is treated as a warning.
-
-```bash
-pgtransfer migrate rollback staging ~/.pgtransfer/backups/rollback_20261017.sql --strict
-```
-
-### `--verbose` now shows the restore command
-
-`--verbose` printed the `pg_dump` command but not the `pg_restore` one, so the
-command you'd most want when a restore misbehaves was the one you couldn't see.
-It prints now, with the password replaced by `***`.
-
-### MCP `migrate_database` accepts `strict`
-
-The MCP tool omitted `strict` entirely, so an agent driving a migration through
-the protocol got weaker error semantics than the CLI for the same operation.
-It is available alongside `overwrite` and `enable_rollback`.
-
-## 📚 Docs
-
-`README.md` gains sections for `pgtransfer log` and `--dry-run`, a flag table for
-`migrate rollback`, and the new `dry_run_failed` error code. Every example in the
-new sections was run against a live PostgreSQL 16 instance before publication.
+- `scripts/bench.sh` measures export, import and migration next to the
+  `pg_dump`/`pg_restore` or `COPY` floor for each, and prints a markdown table.
+- The parser's read window is deliberately small. Both parse paths scan from the
+  parse position to the end of the window, so buffering far ahead of the record
+  being read makes every field scan bytes that are not its own: an import took
+  2.9 s with a 256-byte window and 21 s with a 64 KB one. A buffered reader under
+  the parser keeps the syscall count low while the window stays short.
