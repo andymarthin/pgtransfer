@@ -41,67 +41,6 @@ func restoreOptionsFor(opts *MigrationOptions) *RestoreOptions {
 	}
 }
 
-// MigrateDatabaseWithOptions performs database migration with specified options
-func MigrateDatabaseWithOptions(opts *MigrationOptions) error {
-	if opts.Verbose {
-		fmt.Printf("🚀 Starting database migration from %s to %s\n", opts.SourceProfile.Name, opts.TargetProfile.Name)
-	}
-
-	// Validate migration parameters
-	if opts.Validate {
-		if err := validateMigration(opts); err != nil {
-			return fmt.Errorf("migration validation failed: %w", err)
-		}
-		if opts.Verbose {
-			fmt.Printf("✅ Migration validation passed\n")
-		}
-	}
-
-	// Create rollback backup if enabled
-	var rollbackFile string
-	if opts.EnableRollback {
-		if opts.Verbose {
-			fmt.Printf("📦 Creating rollback backup...\n")
-		}
-		backup, err := createRollbackBackup(opts)
-		if err != nil {
-			return fmt.Errorf("failed to create rollback backup: %w", err)
-		}
-		rollbackFile = backup
-		if opts.Verbose {
-			fmt.Printf("✅ Rollback backup created: %s\n", rollbackFile)
-		}
-	}
-
-	// Perform the migration
-	if err := performMigration(opts); err != nil {
-		if opts.EnableRollback && rollbackFile != "" {
-			if opts.Verbose {
-				fmt.Printf("❌ Migration failed, attempting rollback...\n")
-			}
-			if rollbackErr := performRollback(opts, rollbackFile); rollbackErr != nil {
-				return fmt.Errorf("migration failed and rollback failed: migration error: %w, rollback error: %v", err, rollbackErr)
-			}
-			if opts.Verbose {
-				fmt.Printf("✅ Rollback completed successfully\n")
-			}
-			return fmt.Errorf("migration failed but rollback succeeded: %w", err)
-		}
-		return err
-	}
-
-	if opts.Verbose {
-		fmt.Printf("🎉 Migration completed successfully!\n")
-	}
-
-	// Clean up rollback file if migration succeeded and user doesn't want to keep it
-	if rollbackFile != "" && !opts.Verbose {
-		os.Remove(rollbackFile)
-	}
-
-	return nil
-}
-
 // MigrateDatabaseWithConnection performs database migration using DBConnection objects for SSH support
 func MigrateDatabaseWithConnection(opts *MigrationOptions) error {
 	if opts.Verbose {

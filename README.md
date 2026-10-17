@@ -479,8 +479,22 @@ pgtransfer migrate rollback staging /path/to/backup.dump
 
 Restores a backup taken before a migration, undoing the changes it made. The backup
 is the file named by `--enable-rollback` when the migration ran, under
-`~/.pgtransfer/backups/`. Add `--verbose` to see the underlying restore command, or
-`--timeout` to bound it.
+`~/.pgtransfer/backups/`.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--strict` | off | Abort on the first restore error instead of tolerating it |
+| `--timeout` | `0` | Abort after this many seconds; `0` means no limit |
+| `--verbose` | off | Print the underlying restore command |
+
+`--strict` matters most here: a rollback that carries on past a failed statement
+leaves the target in a state that is neither the old one nor the new one. Pass it
+when a partial rollback would be worse than a failed one.
+
+```bash
+# Stop at the first error rather than leaving the database half-restored
+pgtransfer migrate rollback staging ~/.pgtransfer/backups/rollback_staging_20261017_091500.sql --strict
+```
 
 ### Read the operation log
 
@@ -651,7 +665,8 @@ For Claude Desktop, add this to `claude_desktop_config.json`:
 | `migrate_database` | Migrate between databases or profiles |
 
 The CSV tools take the same defaults as the CLI: `headers` is on unless set to
-false, and `batch_size` is 20000.
+false, and `batch_size` is 20000. `import_dump` and `migrate_database` both take
+`strict`, with the same meaning as `--strict` on the commands they mirror.
 
 Tool failures come back in-band with `isError: true` and the same
 `{"ok": false, "error": {...}}` payload, so a model can read the problem and correct

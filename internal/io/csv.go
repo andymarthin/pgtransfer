@@ -165,101 +165,6 @@ func FormatCSVValue(v interface{}) string {
 	}
 }
 
-// ExportCSV exports a PostgreSQL table to a CSV file with a live progress bar.
-//
-// Kept for callers that only need the defaults; it shares the implementation
-// with ExportCSVWithOptions so the two cannot diverge.
-func ExportCSV(db *sql.DB, table, exportPath string) error {
-	options := DefaultCSVOptions()
-
-	start := time.Now()
-	exportPath = CSVOutputPath(exportPath)
-
-	if err := os.MkdirAll(filepath.Dir(exportPath), 0755); err != nil {
-		return fmt.Errorf("failed to create export directory: %w", err)
-	}
-
-	utils.PrintInfo(nil, "Exporting table '%s'...", table)
-
-	// Count total rows for progress tracking
-	var total int64
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", quoteTable(table))
-	if err := db.QueryRow(countQuery).Scan(&total); err != nil {
-		total = -1 // fallback if counting fails
-	}
-
-	query := fmt.Sprintf("SELECT * FROM %s", quoteTable(table))
-	rows, err := db.Query(query)
-	if err != nil {
-		return fmt.Errorf("failed to query table: %w", err)
-	}
-	defer rows.Close()
-
-	cols, err := rows.Columns()
-	if err != nil {
-		return fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	file, err := os.Create(exportPath)
-	if err != nil {
-		return fmt.Errorf("failed to create export file: %w", err)
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	if options.HasHeader {
-		if err := writer.Write(cols); err != nil {
-			return fmt.Errorf("failed to write CSV header: %w", err)
-		}
-	}
-
-	bar := NewProgressBarWithTimer(total, fmt.Sprintf("Exporting %s", table))
-	defer bar.Finish()
-
-	values := make([]interface{}, len(cols))
-	valuePtrs := make([]interface{}, len(cols))
-	for i := range values {
-		valuePtrs[i] = &values[i]
-	}
-
-	var written int64
-	for rows.Next() {
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return fmt.Errorf("row scan failed: %w", err)
-		}
-
-		record := make([]string, len(cols))
-		for i, v := range values {
-			record[i] = FormatCSVValue(v)
-		}
-		if err := writer.Write(record); err != nil {
-			return fmt.Errorf("failed to write row: %w", err)
-		}
-
-		written++
-		bar.Add(1)
-	}
-	// A driver can stop iterating because the connection failed, because the
-	// server cancelled the query or because a value could not be converted.
-	// Next() returning false covers all of those as well as a clean end, so the
-	// error must be checked or a truncated export looks like a complete one.
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading rows: %w", err)
-	}
-
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("failed writing CSV: %w", err)
-	}
-
-	duration := time.Since(start)
-	utils.PrintSuccess(nil, "✅ Exported %d rows to %s", written, exportPath)
-	utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
-	return nil
-}
-
 // ExportCSVWithOptions exports a PostgreSQL table to CSV with batch processing for better memory efficiency
 func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOptions) error {
 	if options == nil {
@@ -436,14 +341,6 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 	utils.PrintSuccess(nil, "✅ Exported %d rows to %s (batch size: %d)", written, exportPath, options.BatchSize)
 	utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
 	return nil
-}
-
-// ImportCSV imports data from a CSV file into a PostgreSQL table.
-func ImportCSV(db *sql.DB, table, importPath string) error {
-	return ImportCSVWithOptions(db, table, importPath, &CSVOptions{
-		BatchSize: DefaultBatchSize,
-		HasHeader: true,
-	})
 }
 
 // ImportCSVWithOptions imports data from a CSV file with batch processing for better performance
