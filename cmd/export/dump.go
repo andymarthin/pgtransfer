@@ -7,6 +7,7 @@ import (
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/io"
 	"github.com/andymarthin/pgtransfer/internal/output"
+	"github.com/andymarthin/pgtransfer/internal/preflight"
 	"github.com/spf13/cobra"
 )
 
@@ -61,6 +62,16 @@ func runDumpExport(cmd *cobra.Command, args []string) error {
 	// Validate mutually exclusive options
 	if dumpSchemaOnly && dumpDataOnly {
 		return fmt.Errorf("--schema-only and --data-only are mutually exclusive")
+	}
+
+	// pg_dump is the only thing that can produce the dump, so a machine
+	// without it should say so before the profile is loaded and the output
+	// file is touched.
+	if err := preflight.Check(preflight.PgDump); err != nil {
+		if output.IsJSON() {
+			return output.Fail("export dump", "missing_tool", "%v", err)
+		}
+		return err
 	}
 
 	// Load profile

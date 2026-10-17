@@ -12,6 +12,7 @@ import (
 	"github.com/andymarthin/pgtransfer/internal/io"
 	"github.com/andymarthin/pgtransfer/internal/log"
 	"github.com/andymarthin/pgtransfer/internal/output"
+	"github.com/andymarthin/pgtransfer/internal/preflight"
 )
 
 var rollbackCmd = &cobra.Command{
@@ -56,6 +57,20 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	// Validate backup file exists
 	if _, err := os.Stat(backupFile); os.IsNotExist(err) {
 		return fmt.Errorf("backup file does not exist: %s", backupFile)
+	}
+
+	// A rollback restores an archive: pg_restore for a custom, tar or
+	// directory dump, psql for a plain SQL file. Which one is read from the
+	// file, so check for the one the restore will actually run.
+	tools := []preflight.Tool{preflight.PgRestore}
+	if plain, err := io.IsPlainTextDump(backupFile); err == nil && plain {
+		tools = []preflight.Tool{preflight.Psql}
+	}
+	if err := preflight.Check(tools...); err != nil {
+		if output.IsJSON() {
+			return output.Fail("migrate rollback", "missing_tool", "%v", err)
+		}
+		return err
 	}
 
 	// Load configuration

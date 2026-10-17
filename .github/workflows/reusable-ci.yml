@@ -170,8 +170,8 @@ jobs:
           # do not match the published SHA256SUMS, it must abort.
           #
           # Use the API with the workflow token: unauthenticated requests share
-          # a per-IP quota that GitHub's runners routinely exhaust, which made
-          # this step fail on rate limiting rather than on the gate.
+          # a per-IP quota that GitHub's runners routinely exhaust, so this
+          # step must not depend on that quota.
           work=$(mktemp -d)
           cd "$work"
 

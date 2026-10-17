@@ -53,6 +53,14 @@ func TestIsPlainTextDump(t *testing.T) {
 			wantText: false,
 		},
 		{
+			// A dump that was filtered or written by hand carries none of the
+			// markers above. It is still SQL, and pg_restore refuses anything
+			// that is not an archive, so the fallback has to catch it.
+			name:     "sql without a pg_dump header",
+			content:  []byte("SELECT 1;\n"),
+			wantText: true,
+		},
+		{
 			name:     "empty file",
 			content:  []byte(""),
 			wantText: false,
@@ -68,6 +76,31 @@ func TestIsPlainTextDump(t *testing.T) {
 			}
 			if got != tc.wantText {
 				t.Fatalf("isPlainTextDump() = %v, want %v", got, tc.wantText)
+			}
+		})
+	}
+}
+
+// TestLooksLikeSQL pins the fallback that keeps a hand-written or filtered dump
+// on the psql path.
+func TestLooksLikeSQL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"statement", "SELECT 1;", true},
+		{"multi line", "BEGIN;\nSELECT 1;\nCOMMIT;\n", true},
+		{"with tabs", "\tSELECT 1;", true},
+		{"no terminator", "SELECT 1", false},
+		{"binary control byte", "SELECT \x01 1;", false},
+		{"invalid utf8", "SELECT \xff 1;", false},
+		{"empty", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := looksLikeSQL(tc.in); got != tc.want {
+				t.Errorf("looksLikeSQL(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}
