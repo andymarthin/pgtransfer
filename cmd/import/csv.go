@@ -143,6 +143,6 @@ func runCSVImport(cmd *cobra.Command, args []string) error {
 func init() {
 	csvCmd.Flags().BoolVar(&csvOverwrite, "overwrite", false, "Truncate table before importing (removes all existing data)")
 	csvCmd.Flags().BoolVar(&csvHeaders, "headers", false, "First row contains column headers")
-	csvCmd.Flags().IntVar(&csvBatchSize, "batch-size", 500, "Number of rows to process in each batch (default: 500)")
+	csvCmd.Flags().IntVar(&csvBatchSize, "batch-size", 20000, "Number of rows to process in each batch")
 	csvCmd.Flags().StringVar(&csvSchema, "schema", "", "Database schema name (default: 'public')")
 }

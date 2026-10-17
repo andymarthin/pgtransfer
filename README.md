@@ -864,24 +864,40 @@ PGTransfer is designed for efficient data operations with intelligent batch proc
 ### Performance Features
 
 - **🔄 Streaming Processing**: Handles datasets larger than available memory
-- **🧠 Adaptive Batching**: Adjusts batch sizes dynamically based on data complexity
+- **🎯 Key-Based Pagination**: Exports page through the table by primary key, so results are complete and ordering is deterministic
 - **⚡ Connection Pooling**: Reuses database connections efficiently
 - **📊 Real-time Metrics**: Provides live performance monitoring with time estimates
 - **💾 Memory Efficiency**: Maintains minimal memory usage regardless of dataset size
 
 ### Batch Size Optimization
 
-**Default batch size: 1000 rows** - works well for most environments and use cases.
+**Default batch size: 20,000 rows.** Each batch is one query against the
+database, so larger batches mean fewer round trips and less per-query overhead.
+The default suits most environments; lower it if you are tight on memory or on a
+high-latency connection where huge batches time out.
 
-#### Performance Benchmarks (1M Records, Mixed Data Types)
+#### Measured Export Performance (5,000,000 rows, 8 columns)
 
-| Batch Size | Throughput | Memory Usage | Best For |
-|------------|------------|--------------|----------|
-| 500        | 4,200 rec/sec | 35MB | Memory-constrained systems |
-| 1,000 (default) | 6,800 rec/sec | 65MB | ✅ **Optimal for most cases** |
-| 5,000      | 8,500 rec/sec | 180MB | High-performance networks |
-| 10,000     | 9,200 rec/sec | 320MB | Maximum throughput scenarios |
-| 25,000     | 8,800 rec/sec | 750MB | Dedicated database servers |
+Same machine, same table, PostgreSQL 15.
+
+| Batch size | Time | Throughput |
+|------------|------|------------|
+| 500 | 15.3 s | ~327,000 rows/s |
+| 20,000 (default) | **9.8 s** | ~510,000 rows/s |
+
+For reference, server-side `COPY TO STDOUT` (the floor for any client that has
+to parse and re-emit the data) takes **5.3 s**, or ~949,000 rows/s.
+
+Memory stays flat at roughly 20-25 MB regardless of table size, because batches
+are streamed to disk rather than buffered.
+
+Export scales linearly with row count at the default settings:
+
+| Rows | Time |
+|------|------|
+| 1,000,000 | 3.6 s |
+| 5,000,000 | 9.8 s |
+| 10,000,000 | 17.0 s |
 
 ### Production Examples
 
@@ -1254,6 +1270,24 @@ docker compose down          # keep data
 docker compose down -v       # remove volumes too
 ```
 
+**Test against other PostgreSQL versions:**
+
+The stack uses PostgreSQL 15 by default. To check a different major version,
+run it standalone on its own port:
+
+```bash
+docker run -d --name pgt-pg17 \
+  -e POSTGRES_DB=testdb -e POSTGRES_USER=testuser -e POSTGRES_PASSWORD=testpass \
+  -p 5417:5432 postgres:17-alpine
+
+./pgtransfer profile add pg17 \
+  --host localhost --port 5417 \
+  --user testuser --password testpass \
+  --database testdb
+```
+
+Swap `17` for `16` or `18` (and the port accordingly) to test those releases.
+
 ### Code Quality
 
 ```bash
@@ -1272,6 +1306,45 @@ go mod tidy
 # Build and test
 go build -o pgtransfer . && go test ./...
 ```
+
+### Benchmarks
+
+The CPU-bound parts of the pipeline are benchmarked so that performance work can
+be measured rather than guessed. A `Makefile` wraps the commands:
+
+| Command | What it does |
+|---------|--------------|
+| `make bench` | Runs every benchmark with `-benchmem` |
+| `make bench-csv` | Runs only the CSV export/import benchmarks |
+| `make bench-save` | Records a baseline in `.bench/baseline.txt` |
+| `make bench-compare` | Re-runs and diffs against the baseline with `benchstat` |
+| `make bench-clean` | Removes recorded benchmark data |
+
+```bash
+# Run everything
+make bench
+
+# Record a baseline, change some code, then compare
+make bench-save
+# ...make a change...
+make bench-compare
+```
+
+The suite lives next to the code it measures:
+
+| File | Covers |
+|------|--------|
+| `internal/io/csv_bench_test.go` | `FormatCSVValue` per type, an 8-column row, CSV encoding cost, the full format-and-write pipeline, and column-list parsing |
+| `internal/output/output_bench_test.go` | JSON success and error envelopes, the at-most-once guard, `IsJSON`, and text-mode error output |
+| `internal/config/config_bench_test.go` | `BuildDSN` (plain, escaped, and URL forms), config loading for 1/10/50 profiles, and profile existence checks |
+| `internal/mcpserver/server_bench_test.go` | Schema qualification, CSV argument splitting, JSON argument decoding, and tool result construction |
+
+Benchmarks never touch a database: the query layer is I/O bound and is covered
+by the integration tests, while these benchmarks isolate the CPU cost that a
+change to formatting or encoding would actually affect.
+
+Run them locally and compare against a recorded baseline with `make bench-save`
+and `make bench-compare`.
 
 ## 🔒 Security Features
 

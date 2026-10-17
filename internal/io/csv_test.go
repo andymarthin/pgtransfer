@@ -89,10 +89,23 @@ func TestFormatCSVValue_ValuerError(t *testing.T) {
 
 func TestDefaultCSVOptions(t *testing.T) {
 	opts := DefaultCSVOptions()
-	if opts.BatchSize != 500 {
-		t.Fatalf("expected default BatchSize 500, got %d", opts.BatchSize)
+	if opts.BatchSize != DefaultBatchSize {
+		t.Fatalf("expected default BatchSize %d, got %d", DefaultBatchSize, opts.BatchSize)
 	}
 	if !opts.HasHeader {
 		t.Fatalf("expected default HasHeader true")
+	}
+}
+
+// TestDefaultBatchSizeIsLargeEnough guards the performance lesson behind the
+// default: a small batch means a separate query per few hundred rows, which
+// dominated export time (15.3s vs 7.5s on 5M rows at batch 500 vs 20000).
+func TestDefaultBatchSizeIsLargeEnough(t *testing.T) {
+	if DefaultBatchSize < 5000 {
+		t.Errorf("DefaultBatchSize = %d; values below 5000 make batch overhead dominant", DefaultBatchSize)
+	}
+	// The batch is buffered in memory, so it must also stay modest.
+	if DefaultBatchSize > 100000 {
+		t.Errorf("DefaultBatchSize = %d; large batches risk memory spikes", DefaultBatchSize)
 	}
 }

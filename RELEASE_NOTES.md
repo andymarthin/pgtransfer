@@ -98,8 +98,7 @@ updates itself from each release.
 - The release workflow notifies the Homebrew tap, which rewrites its formula
   against the new `SHA256SUMS`.
 - **New performance-friendly CI triggers:** CI runs on pushes to `main` and on
-  all pull requests. Topic branches are no longer built twice (previously a push
-  to a branch with an open PR triggered two identical runs).
+  all pull requests, so each change is verified once.
 - CI and Release share the same reusable pipeline (`reusable-ci.yml`), now with
   an **Install script** job that verifies POSIX syntax, the checksum gate, and a
   real install.

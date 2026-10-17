@@ -273,6 +273,6 @@ func init() {
 	csvCmd.Flags().BoolVar(&csvOverwrite, "overwrite", false, "Overwrite output file if it exists")
 	csvCmd.Flags().StringVar(&csvQuery, "query", "", "Custom SQL query to execute")
 	csvCmd.Flags().BoolVar(&csvHeaders, "headers", false, "Include column headers in CSV output")
-	csvCmd.Flags().IntVar(&csvBatchSize, "batch-size", 500, "Number of rows to process in each batch (default: 500)")
+	csvCmd.Flags().IntVar(&csvBatchSize, "batch-size", 20000, "Number of rows to process in each batch")
 	csvCmd.Flags().StringVar(&csvSchema, "schema", "", "Database schema name (default: 'public')")
 }
