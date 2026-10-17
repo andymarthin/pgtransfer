@@ -30,11 +30,11 @@ file was reported as a successful export.
 ### A failed restore no longer reports success
 
 `pg_restore` exits with status 1 both for benign client/server version skew and for
-a table that failed to load. Every exit status of 1 used to be treated as "restored
-with warnings", so a restore that silently dropped a table printed a warning and
-returned success. Restore output is classified line by line instead: known
-version-skew messages stay warnings and are counted, and anything else fails the
-command and names the offending line. `--strict` also passes `--exit-on-error`.
+a table that failed to load. Treating every exit status of 1 as "restored with
+warnings" let a restore that silently dropped a table print a warning and return
+success. Restore output is classified line by line instead: known version-skew
+messages stay warnings and are counted, and anything else fails the command and
+names the offending line. `--strict` also passes `--exit-on-error`.
 
 ### Table and column names are quoted
 
