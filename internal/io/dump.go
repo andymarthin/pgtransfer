@@ -293,6 +293,8 @@ type RestoreOptions struct {
 	// errors, so the default (Strict == false) keeps restores resilient to
 	// version skew.
 	Strict bool
+	// Verbose prints the underlying command, with the password redacted.
+	Verbose bool
 }
 
 // buildPgRestoreArgs assembles the pg_restore argument list.
@@ -416,6 +418,12 @@ func runRestoreCommand(tool string, args []string, dumpPath string, options *Res
 
 	cmd := exec.CommandContext(ctx, tool, args...)
 	cmd.Stdout = os.Stdout
+
+	// The arguments name the database, so one of them carries the password.
+	// Print them only when asked, and redacted.
+	if options != nil && options.Verbose {
+		utils.PrintInfo(nil, "Command: %s %s", tool, strings.Join(redactArgs(args), " "))
+	}
 
 	// Restore errors are classified by what the tool wrote to stderr, not by
 	// its exit status. pg_restore exits 1 both for "completed with ignorable

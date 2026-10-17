@@ -305,6 +305,7 @@ func registerMigrate(srv *mcp.Server) {
 			"data_only":       boolean("Migrate data without the schema."),
 			"tables":          str("Comma-separated list of tables to migrate."),
 			"overwrite":       boolean("Overwrite existing objects in the target."),
+			"strict":          boolean("Fail on the first restore error instead of tolerating version skew."),
 			"enable_rollback": boolean("Capture a rollback backup before migrating."),
 		}, "source_profile"),
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -317,6 +318,7 @@ func registerMigrate(srv *mcp.Server) {
 			DataOnly       bool   `json:"data_only"`
 			Tables         string `json:"tables"`
 			Overwrite      bool   `json:"overwrite"`
+			Strict         bool   `json:"strict"`
 			EnableRollback bool   `json:"enable_rollback"`
 		}
 		if err := decodeInput(req.Params.Arguments, &in); err != nil {
@@ -357,6 +359,7 @@ func registerMigrate(srv *mcp.Server) {
 			DataOnly:       in.DataOnly,
 			Tables:         splitCSV(in.Tables),
 			Overwrite:      in.Overwrite,
+			Strict:         in.Strict,
 			EnableRollback: in.EnableRollback,
 		}
 		if err := io.MigrateDatabaseWithConnection(opts); err != nil {

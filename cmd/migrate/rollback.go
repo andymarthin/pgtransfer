@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/andymarthin/pgtransfer/internal/config"
 	"github.com/andymarthin/pgtransfer/internal/io"
+	"github.com/andymarthin/pgtransfer/internal/log"
 	"github.com/andymarthin/pgtransfer/internal/output"
 )
 
@@ -26,7 +28,10 @@ effectively rolling back any changes made during a migration.`,
   pgtransfer migrate rollback mydb /path/to/backup.sql --verbose
 
   # Rollback with timeout
-  pgtransfer migrate rollback mydb /path/to/backup.sql --timeout 300`,
+  pgtransfer migrate rollback mydb /path/to/backup.sql --timeout 300
+
+  # Fail on the first restore error instead of tolerating version skew
+  pgtransfer migrate rollback mydb /path/to/backup.sql --strict`,
 	Args: cobra.ExactArgs(2),
 	RunE: runRollback,
 }
@@ -34,14 +39,17 @@ effectively rolling back any changes made during a migration.`,
 var (
 	rollbackVerbose bool
 	rollbackTimeout int
+	rollbackStrict  bool
 )
 
 func init() {
 	rollbackCmd.Flags().BoolVarP(&rollbackVerbose, "verbose", "v", false, "Enable verbose output")
 	rollbackCmd.Flags().IntVar(&rollbackTimeout, "timeout", 0, "Timeout in seconds (0 = no timeout)")
+	rollbackCmd.Flags().BoolVar(&rollbackStrict, "strict", false, "Abort the rollback on the first restore error")
 }
 
 func runRollback(cmd *cobra.Command, args []string) error {
+	start := time.Now()
 	targetProfile := args[0]
 	backupFile := args[1]
 
@@ -80,10 +88,12 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		TargetProfile: *targetConfig,
 		Verbose:       rollbackVerbose,
 		Timeout:       rollbackTimeout,
+		Strict:        rollbackStrict,
 	}
 
 	// Perform rollback
 	if err := performRollbackOperation(opts, backupFile); err != nil {
+		log.Failure("migrate rollback", targetProfile, err.Error(), start)
 		if output.IsJSON() {
 			return output.Fail("migrate rollback", "rollback_failed", "rollback failed: %v", err)
 		}
@@ -98,8 +108,22 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	log.Success("migrate rollback", targetProfile, fmt.Sprintf("Rolled back from %s", filepath.Base(backupFile)), start)
 	fmt.Printf("✅ Rollback completed successfully\n")
 	return nil
+}
+
+// restoreOptionsForRollback derives the restore options for a rollback.
+//
+// Strict has to reach the restore, otherwise a rollback asked to stop on the
+// first error would tolerate every error exactly like a default restore, and
+// leave the target half-rolled-back while reporting success.
+func restoreOptionsForRollback(opts *io.MigrationOptions) *io.RestoreOptions {
+	return &io.RestoreOptions{
+		Timeout: opts.Timeout,
+		Strict:  opts.Strict,
+		Verbose: opts.Verbose,
+	}
 }
 
 func performRollbackOperation(opts *io.MigrationOptions, backupFile string) error {
@@ -110,9 +134,9 @@ func performRollbackOperation(opts *io.MigrationOptions, backupFile string) erro
 	// Create progress bar for rollback
 	rollbackBar := io.NewProgressBarWithTimer(0, fmt.Sprintf("Rolling back from %s", filepath.Base(backupFile)))
 
-	// Restore from backup
+	// Restore from backup.
 	targetURL := config.BuildDSN(opts.TargetProfile)
-	restoreOpts := &io.RestoreOptions{Timeout: opts.Timeout}
+	restoreOpts := restoreOptionsForRollback(opts)
 	if err := io.RestoreDatabaseSmartWithOptions(targetURL, backupFile, restoreOpts); err != nil {
 		rollbackBar.Finish()
 		return fmt.Errorf("failed to restore from backup: %w", err)
