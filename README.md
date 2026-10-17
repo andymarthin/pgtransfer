@@ -1273,6 +1273,47 @@ go mod tidy
 go build -o pgtransfer . && go test ./...
 ```
 
+### Benchmarks
+
+The CPU-bound parts of the pipeline are benchmarked so that performance work can
+be measured rather than guessed. A `Makefile` wraps the commands:
+
+| Command | What it does |
+|---------|--------------|
+| `make bench` | Runs every benchmark with `-benchmem` |
+| `make bench-csv` | Runs only the CSV export/import benchmarks |
+| `make bench-save` | Records a baseline in `.bench/baseline.txt` |
+| `make bench-compare` | Re-runs and diffs against the baseline with `benchstat` |
+| `make bench-clean` | Removes recorded benchmark data |
+
+```bash
+# Run everything
+make bench
+
+# Record a baseline, change some code, then compare
+make bench-save
+# ...make a change...
+make bench-compare
+```
+
+The suite lives next to the code it measures:
+
+| File | Covers |
+|------|--------|
+| `internal/io/csv_bench_test.go` | `FormatCSVValue` per type, an 8-column row, CSV encoding cost, the full format-and-write pipeline, and column-list parsing |
+| `internal/output/output_bench_test.go` | JSON success and error envelopes, the at-most-once guard, `IsJSON`, and text-mode error output |
+| `internal/config/config_bench_test.go` | `BuildDSN` (plain, escaped, and URL forms), config loading for 1/10/50 profiles, and profile existence checks |
+| `internal/mcpserver/server_bench_test.go` | Schema qualification, CSV argument splitting, JSON argument decoding, and tool result construction |
+
+Benchmarks never touch a database: the query layer is I/O bound and is covered
+by the integration tests, while these benchmarks isolate the CPU cost that a
+change to formatting or encoding would actually affect.
+
+CI runs the benchmarks on every push and pull request, but only to keep them
+compiling — shared runners are too noisy to assert on timing. The results are
+uploaded as the `benchmarks` artifact for manual comparison against a baseline
+recorded on your own machine.
+
 ## 🔒 Security Features
 
 ### Authentication & Encryption

@@ -29,6 +29,7 @@ logs/
 build/*.tar.gz
 build/*.zip
 dist/
+.bench/
 coverage.out
 *.prof
 *.cov
