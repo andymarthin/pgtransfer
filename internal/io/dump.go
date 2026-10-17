@@ -34,6 +34,12 @@ type DumpOptions struct {
 	Timeout       int      // Command timeout in seconds
 }
 
+// DumpDatabase writes a plain SQL dump of dbURL to dumpPath.
+//
+// The CLI and MCP server both reach the database through a profile, so they go
+// through DumpDatabaseWithConnection{,AndOptions}; this is the direct form for
+// callers that already hold a connection string. It is also the path the
+// integration tests exercise, because it needs no profile.
 func DumpDatabase(dbURL, dumpPath string) error {
 	start := time.Now()
 
@@ -305,22 +311,6 @@ func buildPgRestoreArgs(dbURL, dumpPath string, clean, strict bool) []string {
 	}
 	args = append(args, "--dbname", dbURL, dumpPath)
 	return args
-}
-
-func RestoreDatabase(dbURL, dumpPath string) error {
-	start := time.Now()
-
-	if _, err := os.Stat(dumpPath); err != nil {
-		return fmt.Errorf("dump file not found: %w", err)
-	}
-
-	if !commandExists("pg_restore") {
-		return fmt.Errorf("pg_restore not found in PATH — please install PostgreSQL client tools")
-	}
-
-	utils.PrintInfo(nil, "Starting database restore from %s...", dumpPath)
-
-	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, false, false), dumpPath, nil, start)
 }
 
 // RestoreDatabaseSmart automatically detects dump format and uses appropriate tool

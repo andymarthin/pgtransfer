@@ -2,6 +2,8 @@ package utils
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -24,7 +26,7 @@ func PrintSuccess(cmd *cobra.Command, format string, args ...interface{}) {
 
 // PrintError prints a red error message.
 func PrintError(cmd *cobra.Command, format string, args ...interface{}) {
-	printCmdErr(cmd, ColorRed+"❌ "+format+ColorReset+"\n", args...)
+	fmt.Fprintf(writerFor(cmd, false), ColorRed+"❌ "+format+ColorReset+"\n", args...)
 }
 
 // PrintWarning prints a yellow warning message.
@@ -51,9 +53,9 @@ func PrintMuted(cmd *cobra.Command, format string, args ...interface{}) {
 func PrintTitle(cmd *cobra.Command, title string) {
 	formatted := fmt.Sprintf("\n%s%s%s%s\n", ColorBold, ColorBlue, title, ColorReset)
 	if cmd != nil {
-		cmd.Print(formatted)
+		fmt.Fprint(cmd.OutOrStdout(), formatted)
 	} else {
-		fmt.Print(formatted)
+		fmt.Fprint(os.Stdout, formatted)
 	}
 }
 
@@ -64,20 +66,30 @@ func PrintDivider(cmd *cobra.Command) {
 
 // Internal helpers to avoid nil pointer panics if cmd is nil
 func printCmd(cmd *cobra.Command, format string, args ...interface{}) {
-	if cmd != nil {
-		cmd.Printf(format, args...)
-	} else {
-		fmt.Printf(format, args...)
-	}
+	fmt.Fprintf(writerFor(cmd, false), format, args...)
 }
 
-func printCmdErr(cmd *cobra.Command, format string, args ...interface{}) {
-	if cmd != nil {
-		cmd.PrintErrf(format, args...)
-	} else {
-		fmt.Printf(format, args...)
+// writerFor resolves where a message should go. A nil command means the process
+// streams, os.Stdout or os.Stderr; a command means its cobra streams, which is
+// what makes output redirectable in-process.
+//
+// The store is re-read on every call rather than captured once, so a test that
+// replaces os.Stdout after package initialisation still captures the output.
+func writerFor(cmd *cobra.Command, stderr bool) io.Writer {
+	if stderr {
+		if cmd == nil {
+			return os.Stderr
+		}
+		return cmd.ErrOrStderr()
 	}
+	if cmd == nil {
+		return os.Stdout
+	}
+	return cmd.OutOrStdout()
 }
+
+// errWriter is the destination for error output.
+func errWriter(cmd *cobra.Command) io.Writer { return writerFor(cmd, true) }
 
 // Inline color helpers for other packages (e.g., log viewer)
 func ColorTextGreen(s string) string  { return ColorGreen + s + ColorReset }

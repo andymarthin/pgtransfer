@@ -30,6 +30,7 @@ pgtransfer migrate database prod staging
   - [Restore a dump](#restore-a-dump)
   - [Migrate between databases](#migrate-between-databases)
   - [Roll back a migration](#roll-back-a-migration)
+  - [Read the operation log](#read-the-operation-log)
 - [SSH tunnels](#ssh-tunnels)
 - [JSON output and MCP](#json-output-and-mcp)
 - [Data types and CSV format](#data-types-and-csv-format)
@@ -393,6 +394,7 @@ pgtransfer migrate database prod staging --target-database staging_copy
 | `--tables` | all | Comma-separated list of tables |
 | `--overwrite` | off | Replace existing objects in the target |
 | `--strict` | off | Abort on the first restore error instead of tolerating it |
+| `--dry-run` | off | Report what would happen and change nothing |
 | `--validate` | off | Pre-flight check: reach both ends, and confirm any `--tables` exist in the source |
 | `--enable-rollback` | off | Back up the target before migrating, so you can roll back |
 | `--timeout` | `3600` | Abort after this many seconds |
@@ -411,7 +413,59 @@ pgtransfer migrate database prod staging --tables users,orders --validate
 
 # Treat any restore error as a failed migration
 pgtransfer migrate database prod staging --strict
+
+# See what would happen first
+pgtransfer migrate database prod staging --dry-run
 ```
+
+#### Check the plan first
+
+`--dry-run` answers "what is about to happen to the target?" without touching
+either database. It connects, reads the table lists and column types, and prints
+the plan:
+
+```bash
+pgtransfer migrate database prod staging --dry-run --overwrite
+```
+
+```
+🔍 Migration plan (dry run)
+From:      prod
+To:        staging
+Mode:      schema and data
+Overwrite: on - existing target tables are dropped and recreated
+Strict:    false
+
+TABLE          ROWS     TARGET
+orders         842,113  dropped and recreated
+products         1,204  dropped and recreated
+users          250,000  dropped and recreated
+```
+
+It reports three things you cannot see by reading the flags:
+
+- **What `--overwrite` would drop.** Existing target tables are listed as
+  "dropped and recreated", so a migration aimed at the wrong database is visible
+  before it runs.
+- **Which columns have incompatible types.** A differing type is not fixed by the
+  restore — an existing target column keeps its type — so the copy either fails or
+  coerces values. These are listed with both types.
+- **Tables present on one side only.** A table that exists only in the source with
+  `--data-only` is a guaranteed failure, and the report says so.
+
+Row counts come from the planner's statistics, so they are estimates, and they are
+free: counting exactly would read every table, which is the cost a dry run exists
+to avoid.
+
+With `--json` the report is a structured object under `data.report`:
+
+```bash
+pgtransfer --json migrate database prod staging --dry-run 2>/dev/null \
+  | jq '.data.report.type_conflicts'
+```
+
+`2>/dev/null` drops the connection chatter, which goes to stderr; stdout carries
+exactly one JSON object.
 
 The data reaches the target by dumping the source and restoring the dump, so the
 restore flags apply here too: without `--strict` a version-skew message is counted
@@ -427,6 +481,45 @@ Restores a backup taken before a migration, undoing the changes it made. The bac
 is the file named by `--enable-rollback` when the migration ran, under
 `~/.pgtransfer/backups/`. Add `--verbose` to see the underlying restore command, or
 `--timeout` to bound it.
+
+### Read the operation log
+
+```bash
+pgtransfer log
+```
+
+`migrate database` records what it did in `~/.pgtransfer/logs/`, one file per day.
+This reads it back: today by default, or a day you name.
+
+```bash
+pgtransfer log --date 2026-10-17       # a specific day
+pgtransfer log --limit 5               # the last 5 entries today
+pgtransfer --json log                  # machine-readable
+```
+
+```
+📘 Operations on 2026-10-17
+
+TIME      STATUS  COMMAND           PROFILE  DETAIL
+16:15:00  ok      migrate database  prod     migrated public to staging (4.2s)
+16:20:00  fail    export csv        prod     connection reset
+```
+
+With `--json` you get `date`, `total` and an `entries` array (always an array, even
+when empty), so a script can assert on what the last run did:
+
+```bash
+pgtransfer --json log --limit 1 | jq -e '.data.entries[0].status == "success"'
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--date` | today | Day to show, as `YYYY-MM-DD` |
+| `--limit` | all | Show only the last N entries |
+
+A day with no file is reported as no operations, not an error. If today is empty,
+the command names the days that do have entries so you are not left guessing. A
+single malformed line is skipped rather than hiding the rest of the day.
 
 ---
 
@@ -518,8 +611,9 @@ unknown subcommand or a bad flag — and the exit status is non-zero on failure.
 
 Codes you can branch on: `usage_error`, `profile_not_found`, `no_active_profile`,
 `config_load_failed`, `connection_failed`, `export_failed`, `import_failed`,
-`dump_failed`, `restore_failed`, `migration_failed`, `rollback_failed`,
-`file_exists`, `file_not_found`, `truncate_failed`, `invalid_input`.
+`dump_failed`, `restore_failed`, `migration_failed`, `dry_run_failed`, `rollback_failed`,
+`file_exists`, `file_not_found`, `truncate_failed`, `invalid_input`. `pgtransfer log`
+adds `usage_error` for a malformed `--date`.
 
 Passwords never appear in JSON output. Profiles report `has_password: true/false`.
 
@@ -552,12 +646,12 @@ For Claude Desktop, add this to `claude_desktop_config.json`:
 | `test_connection` | Test connectivity, optionally through a tunnel |
 | `export_csv` | Export a table or a query to CSV |
 | `import_csv` | Import a CSV, optionally truncating first |
-
-The CSV tools take the same defaults as the CLI: `headers` is on unless set to
-false, and `batch_size` is 20000.
 | `export_dump` | Create a `pg_dump` backup |
 | `import_dump` | Restore a dump |
 | `migrate_database` | Migrate between databases or profiles |
+
+The CSV tools take the same defaults as the CLI: `headers` is on unless set to
+false, and `batch_size` is 20000.
 
 Tool failures come back in-band with `isError: true` and the same
 `{"ok": false, "error": {...}}` payload, so a model can read the problem and correct
@@ -666,8 +760,7 @@ that way the password is entered without being echoed and the connection is test
 
 ### Logging
 
-`migrate database` appends an entry to `~/.pgtransfer/logs/` as JSON, one file per
-day:
+`migrate database` appends an entry to `~/.pgtransfer/logs/`, one file per day:
 
 ```json
 {
@@ -680,7 +773,9 @@ day:
 }
 ```
 
-Passwords are never written to the log.
+Passwords are never written to the log. Read it back with
+[`pgtransfer log`](#read-the-operation-log); the files are plain JSONL, so `tail -f`
+works too.
 
 ---
 

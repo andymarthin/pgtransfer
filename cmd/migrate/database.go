@@ -9,6 +9,7 @@ import (
 	"github.com/andymarthin/pgtransfer/internal/io"
 	"github.com/andymarthin/pgtransfer/internal/log"
 	"github.com/andymarthin/pgtransfer/internal/output"
+	"github.com/andymarthin/pgtransfer/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,7 @@ var (
 	migrateTimeout        int
 	migrateOverwrite      bool
 	migrateStrict         bool
+	migrateDryRun         bool
 	migrateBatchSize      int
 
 	// Database override options
@@ -80,7 +82,10 @@ Examples:
   pgtransfer migrate database source_profile target_profile --validate
 
   # Migration with rollback support
-  pgtransfer migrate database source_profile target_profile --enable-rollback`,
+  pgtransfer migrate database source_profile target_profile --enable-rollback
+
+  # Show what a migration would do, without doing it
+  pgtransfer migrate database source_profile target_profile --dry-run`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: runDatabaseMigration,
 }
@@ -196,6 +201,18 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 		BatchSize:      migrateBatchSize,
 	}
 
+	// Report the plan and stop. Nothing is dumped or written.
+	if migrateDryRun {
+		report, err := io.DryRunMigration(migrationOpts)
+		if err != nil {
+			if output.IsJSON() {
+				return output.Fail("migrate database", "dry_run_failed", "dry run failed: %v", err)
+			}
+			return fmt.Errorf("dry run failed: %w", err)
+		}
+		return printDryRun(cmd, report)
+	}
+
 	// Perform migration using connection-aware function for SSH support
 	err = io.MigrateDatabaseWithConnection(migrationOpts)
 	if err != nil {
@@ -225,6 +242,31 @@ func runDatabaseMigration(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// printDryRun renders a dry-run report, in JSON or as text.
+func printDryRun(cmd *cobra.Command, report *io.DryRunReport) error {
+	if output.IsJSON() {
+		output.Success("migrate database", map[string]interface{}{
+			"dry_run":        true,
+			"report":         report,
+			"would_migrate":  len(report.Tables),
+			"type_conflicts": len(report.TypeConflicts),
+		})
+		return nil
+	}
+
+	utils.PrintTitle(cmd, "🔍 Migration plan (dry run)")
+	for _, line := range report.Lines() {
+		fmt.Fprintln(cmd.OutOrStdout(), line)
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout())
+	if len(report.TypeConflicts) > 0 {
+		utils.PrintWarning(cmd, "Types that differ will not be fixed by the restore. Align them, or the copy will fail or coerce values.")
+	}
+	utils.PrintInfo(cmd, "Nothing was changed. Run again without --dry-run to migrate.")
+	return nil
+}
+
 func init() {
 	// Schema/Data options
 	databaseCmd.Flags().BoolVar(&migrateSchemaOnly, "schema-only", false, "Migrate schema only (no data)")
@@ -242,6 +284,7 @@ func init() {
 	databaseCmd.Flags().BoolVar(&migrateEnableRollback, "enable-rollback", false, "Enable rollback support (creates backup)")
 	databaseCmd.Flags().BoolVar(&migrateOverwrite, "overwrite", false, "Overwrite existing data in target database")
 	databaseCmd.Flags().BoolVar(&migrateStrict, "strict", false, "Abort the migration on the first restore error")
+	databaseCmd.Flags().BoolVar(&migrateDryRun, "dry-run", false, "Report what would be migrated and change nothing")
 
 	// Performance and output
 	databaseCmd.Flags().BoolVar(&migrateVerbose, "verbose", false, "Enable verbose output")
