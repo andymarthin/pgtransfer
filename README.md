@@ -871,23 +871,22 @@ PGTransfer is designed for efficient data operations with intelligent batch proc
 
 ### Batch Size Optimization
 
-**Default batch size: 20,000 rows.** Each batch is one query, so a small batch
-adds a round trip per few hundred rows. Export used to slice the table with
-`LIMIT/OFFSET`, which made small batches expensive; the export is now paginated
-on the primary key, so batches are cheap and linear, but a larger batch still
-removes per-query overhead.
+**Default batch size: 20,000 rows.** Each batch is one query against the
+database, so larger batches mean fewer round trips and less per-query overhead.
+The default suits most environments; lower it if you are tight on memory or on a
+high-latency connection where huge batches time out.
 
 #### Measured Export Performance (5,000,000 rows, 8 columns)
 
-Same machine, same table, PostgreSQL 15. Measured with `make bench` and real
-exports — see [BENCHMARKS.md](BENCHMARKS.md) for the full methodology.
+Same machine, same table, PostgreSQL 15.
 
 | Batch size | Time | Throughput |
 |------------|------|------------|
 | 500 | 15.3 s | ~327,000 rows/s |
 | 20,000 (default) | **9.8 s** | ~510,000 rows/s |
-| — | — | — |
-| *server-side `COPY TO STDOUT` (reference floor)* | *5.3 s* | *~949,000 rows/s* |
+
+For reference, server-side `COPY TO STDOUT` (the floor for any client that has
+to parse and re-emit the data) takes **5.3 s**, or ~949,000 rows/s.
 
 Memory stays flat at roughly 20-25 MB regardless of table size, because batches
 are streamed to disk rather than buffered.
@@ -1271,6 +1270,24 @@ docker compose down          # keep data
 docker compose down -v       # remove volumes too
 ```
 
+**Test against other PostgreSQL versions:**
+
+The stack uses PostgreSQL 15 by default. To check a different major version,
+run it standalone on its own port:
+
+```bash
+docker run -d --name pgt-pg17 \
+  -e POSTGRES_DB=testdb -e POSTGRES_USER=testuser -e POSTGRES_PASSWORD=testpass \
+  -p 5417:5432 postgres:17-alpine
+
+./pgtransfer profile add pg17 \
+  --host localhost --port 5417 \
+  --user testuser --password testpass \
+  --database testdb
+```
+
+Swap `17` for `16` or `18` (and the port accordingly) to test those releases.
+
 ### Code Quality
 
 ```bash
@@ -1326,12 +1343,8 @@ Benchmarks never touch a database: the query layer is I/O bound and is covered
 by the integration tests, while these benchmarks isolate the CPU cost that a
 change to formatting or encoding would actually affect.
 
-They are **not run in CI**. Shared runners are too noisy for timing to mean
-anything, and a benchmark job would assert nothing useful while adding minutes to
-every pull request; the `unit` job's `go vet` already compiles the benchmark
-files, so one that stops building still fails CI. Run them locally, and compare
-against a baseline with `make bench-save` / `make bench-compare`, when you are
-actually changing the code they cover.
+Run them locally and compare against a recorded baseline with `make bench-save`
+and `make bench-compare`.
 
 ## 🔒 Security Features
 

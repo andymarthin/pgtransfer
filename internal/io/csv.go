@@ -428,17 +428,7 @@ func ImportCSV(db *sql.DB, table, importPath string) error {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
 
-	placeholders := make([]string, len(headers))
-	for i := range headers {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-	}
-
-	insertSQL := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s)",
-		table,
-		strings.Join(headers, ","),
-		strings.Join(placeholders, ","),
-	)
+	insertSQL := buildInsertSQL(table, headers)
 
 	stmt, err := tx.Prepare(insertSQL)
 	if err != nil {
@@ -532,17 +522,7 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 
 	bar := NewProgressBarWithTimer(totalRows, fmt.Sprintf("Importing %s", table))
 
-	placeholders := make([]string, len(headers))
-	for i := range headers {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-	}
-
-	insertSQL := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s)",
-		table,
-		strings.Join(headers, ","),
-		strings.Join(placeholders, ","),
-	)
+	insertSQL := buildInsertSQL(table, headers)
 
 	var imported int64
 	batch := make([][]string, 0, options.BatchSize)
@@ -578,6 +558,42 @@ func ImportCSVWithOptions(db *sql.DB, table, importPath string, options *CSVOpti
 	utils.PrintSuccess(nil, "✅ Imported %d rows from %s (batch size: %d)", imported, importPath, options.BatchSize)
 	utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
 	return nil
+}
+
+// nullableValue maps an empty CSV field to SQL NULL.
+//
+// Export writes NULL as an empty field, so import must invert it. Without this,
+// every NULL becomes an empty string and a round-trip silently changes the
+// data. A genuinely empty string cannot be distinguished from NULL in CSV,
+// which is a limitation of the format itself; treating empty as NULL matches
+// what export produced.
+func nullableValue(v string) interface{} {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// buildInsertSQL builds the parameterised INSERT used for CSV import.
+//
+// Column names come from the CSV header, which is user data: they must be
+// quoted as identifiers, or a numeric or otherwise unusual header produces a
+// syntactically broken statement ("INSERT INTO t (1,2) ...") and a crafted
+// header could alter the statement itself. Values are always passed as
+// parameters, never interpolated.
+func buildInsertSQL(table string, headers []string) string {
+	quoted := make([]string, len(headers))
+	placeholders := make([]string, len(headers))
+	for i, h := range headers {
+		quoted[i] = quoteIdent(h)
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	return fmt.Sprintf(
+		"INSERT INTO %s (%s) VALUES (%s)",
+		table,
+		strings.Join(quoted, ","),
+		strings.Join(placeholders, ","),
+	)
 }
 
 // tableColumns returns the ordered column names for the given table by asking
@@ -691,7 +707,11 @@ func processBatch(db *sql.DB, insertSQL string, batch [][]string, imported *int6
 	for i, row := range batch {
 		args := make([]interface{}, len(row))
 		for j, v := range row {
-			args[j] = v
+			// An empty CSV field is written for a SQL NULL on export, so it is
+			// read back as NULL. Passing "" would silently turn every NULL
+			// column into an empty string, which is a different value: a
+			// round-trip export/import would change the data.
+			args[j] = nullableValue(v)
 		}
 		if _, err := stmt.Exec(args...); err != nil {
 			tx.Rollback()
