@@ -2,6 +2,7 @@ package profile
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -87,7 +88,12 @@ var addCmd = &cobra.Command{
 			(flagInteractive || (!cmd.Flags().Changed("interactive") && !hasConnectionFlags(cmd)))
 
 		if useInteractive {
-			p = promptProfileInput(cmd, name, existingProfile)
+			var err error
+			p, err = promptProfileInput(cmd, name, existingProfile)
+			if err != nil {
+				utils.PrintError(cmd, "Failed to read profile details: %v", err)
+				return err
+			}
 		} else {
 			p = config.Profile{
 				Name:     name,
@@ -157,19 +163,47 @@ func init() {
 	addCmd.Flags().BoolVar(&flagSkipTest, "skip-test", false, "Skip connection testing when adding profile")
 }
 
-// securePrompt prompts for sensitive information without echoing to terminal
-func securePrompt(label string) string {
+// errNoTerminal is returned when a secure prompt cannot read from a terminal.
+var errNoTerminal = errors.New("cannot read a password without a terminal")
+
+// securePrompt prompts for sensitive information without echoing to terminal.
+//
+// A read failure is reported rather than returned as an empty string: an empty
+// password is a valid input (some servers use trust authentication), so
+// returning "" on error stores a profile that cannot authenticate and does not
+// say why.
+func securePrompt(label string) (string, error) {
+	if !term.IsTerminal(int(syscall.Stdin)) {
+		return "", fmt.Errorf("%s: %w", label, errNoTerminal)
+	}
 	fmt.Printf("%s: ", label)
 	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
 	fmt.Println() // Print newline after password input
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("%s: failed to read from terminal: %w", label, err)
 	}
-	return strings.TrimSpace(string(bytePassword))
+	return strings.TrimSpace(string(bytePassword)), nil
+}
+
+// promptPort reads a port number, keeping the default when the answer is empty
+// and reporting an answer that is not a number instead of silently storing 0.
+func promptPort(prompt func(label, defaultValue string) string, label, defaultValue string) (int, error) {
+	text := prompt(label, defaultValue)
+	if text == "" {
+		text = defaultValue
+	}
+	port, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a number", label, text)
+	}
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("%s: %d is out of range (1-65535)", label, port)
+	}
+	return port, nil
 }
 
 // interactive prompt helper
-func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config.Profile) config.Profile {
+func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config.Profile) (config.Profile, error) {
 	reader := bufio.NewReader(os.Stdin)
 	utils.PrintTitle(cmd, "🧩 Interactive Profile Setup")
 
@@ -203,10 +237,15 @@ func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config
 	}
 
 	user := prompt("Database user", defaultUser)
-	password := securePrompt("Database password")
+	password, err := securePrompt("Database password")
+	if err != nil {
+		return config.Profile{}, err
+	}
 	host := prompt("Database host", defaultHost)
-	portStr := prompt("Database port", defaultPort)
-	port, _ := strconv.Atoi(portStr)
+	port, err := promptPort(prompt, "Database port", defaultPort)
+	if err != nil {
+		return config.Profile{}, err
+	}
 	database := prompt("Database name", defaultDatabase)
 	sslmode := prompt("SSL mode", defaultSSLMode)
 
@@ -239,26 +278,36 @@ func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config
 		sshCfg.Enabled = true
 		sshCfg.Host = prompt("SSH host", defaultSSHHost)
 		sshCfg.User = prompt("SSH user", defaultSSHUser)
-		portStr := prompt("SSH port", defaultSSHPort)
-		sshCfg.Port, _ = strconv.Atoi(portStr)
+		sshCfg.Port, err = promptPort(prompt, "SSH port", defaultSSHPort)
+		if err != nil {
+			return config.Profile{}, err
+		}
 
 		// Ask user to choose authentication method
 		authMethod := strings.ToLower(prompt("SSH authentication method - use (k)ey or (p)assword? [k/p]", defaultAuthMethod))
 		if authMethod == "p" || authMethod == "password" {
-			sshCfg.Password = securePrompt("SSH password")
+			sshCfg.Password, err = securePrompt("SSH password")
+			if err != nil {
+				return config.Profile{}, err
+			}
 		} else {
 			sshCfg.KeyPath = prompt("SSH key path", defaultKeyPath)
 			// Ask for passphrase if key path is provided
 			if sshCfg.KeyPath != "" {
 				needsPassphrase := strings.ToLower(prompt("Does the SSH key require a passphrase? (y/N)", "n"))
 				if needsPassphrase == "y" || needsPassphrase == "yes" {
-					sshCfg.Passphrase = securePrompt("SSH key passphrase")
+					sshCfg.Passphrase, err = securePrompt("SSH key passphrase")
+					if err != nil {
+						return config.Profile{}, err
+					}
 				}
 			}
 		}
 
-		timeoutStr := prompt("SSH timeout (seconds)", defaultSSHTimeout)
-		sshCfg.Timeout, _ = strconv.Atoi(timeoutStr)
+		sshCfg.Timeout, err = promptPort(prompt, "SSH timeout (seconds)", defaultSSHTimeout)
+		if err != nil {
+			return config.Profile{}, err
+		}
 	}
 
 	return config.Profile{
@@ -271,7 +320,7 @@ func promptProfileInput(cmd *cobra.Command, name string, existingProfile *config
 		DBURL:    "", // Interactive mode doesn't use DBURL
 		SSLMode:  sslmode,
 		SSH:      sshCfg,
-	}
+	}, nil
 }
 
 // hasConnectionFlags checks if any connection-related flags have been provided

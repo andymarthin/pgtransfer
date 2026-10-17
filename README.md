@@ -11,7 +11,7 @@ an SSH bastion if you need one.
 
 ```bash
 pgtransfer profile add prod          # save a connection once
-pgtransfer export csv prod users users.csv --headers
+pgtransfer export csv prod users users.csv
 pgtransfer migrate database prod staging
 ```
 
@@ -144,7 +144,7 @@ pgtransfer profile add prod
 pgtransfer test-connection prod
 
 # 3. Export a table
-pgtransfer export csv prod users users.csv --headers
+pgtransfer export csv prod users users.csv
 
 # 4. Copy a whole database to staging
 pgtransfer migrate database prod staging
@@ -173,7 +173,10 @@ pgtransfer profile add prod
 
 You will be prompted for the database host, port, name, user, password and SSL
 mode, and optionally for SSH tunnel settings. Every prompt shows a default in
-brackets; press Enter to accept it.
+brackets; press Enter to accept it. Port and timeout answers are validated as
+you give them, and a password prompt that cannot read from a terminal fails
+instead of saving an empty password — pass `--password` when the command runs
+without one.
 
 Create one in a single command instead:
 
@@ -186,6 +189,10 @@ pgtransfer profile add prod \
   --database myapp \
   --sslmode require
 ```
+
+Passwords and database names are URL-encoded when the profile is turned into a
+connection string, so spaces and other special characters work without escaping.
+An IPv6 host is written in brackets automatically.
 
 List, inspect and remove profiles:
 
@@ -215,31 +222,35 @@ pgtransfer test-connection prod --json
 ### Export to CSV
 
 ```bash
-# Whole table, with a header row
-pgtransfer export csv prod public.users users.csv --headers
+# Whole table
+pgtransfer export csv prod public.users users.csv
 
 # Positional form also works: [profile] [table] [output]
-pgtransfer export csv prod users users.csv --headers
+pgtransfer export csv prod users users.csv
+
+# No header row
+pgtransfer export csv prod users users.csv --headers=false
 
 # Another schema
-pgtransfer export csv prod users users.csv --schema reporting --headers
+pgtransfer export csv prod users users.csv --schema reporting
 
 # Only some rows
 pgtransfer export csv prod active.csv \
-  --query "SELECT id, email, created_at FROM users WHERE active = true" \
-  --headers
+  --query "SELECT id, email, created_at FROM users WHERE active = true"
 ```
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--headers` | off | Write a header row as the first line |
+| `--headers` | on | Write a header row as the first line |
 | `--schema` | `public` | Schema for an unqualified table name |
 | `--batch-size` | `20000` | Rows fetched per query |
 | `--query` | — | Export the result of a SQL query instead of a table |
 | `--overwrite` | off | Replace the file if it already exists |
 
 The output file gets a `.csv` extension if you omit one. Export refuses to
-overwrite an existing file unless `--overwrite` is given.
+overwrite an existing file unless `--overwrite` is given, and the check applies
+to the name it will actually write: exporting to `users` while `users.csv`
+exists is refused, because that is the file that would be replaced.
 
 `--schema` supplies a schema for an unqualified table name. Names that need quoting
 (mixed case, spaces, reserved words) work whether or not you quote them yourself.
@@ -251,25 +262,27 @@ expressions. It is executed as a single statement.
 
 ```bash
 # Header row names the columns
-pgtransfer import csv prod public.users users.csv --headers
-
-# Header-less file: columns are matched by position
 pgtransfer import csv prod public.users users.csv
 
+# Header-less file: columns are matched by position
+pgtransfer import csv prod public.users users.csv --headers=false
+
 # Replace the table contents first
-pgtransfer import csv prod public.users users.csv --headers --overwrite
+pgtransfer import csv prod public.users users.csv --overwrite
 ```
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--headers` | off | Treat the first row as column names |
+| `--headers` | on | Treat the first row as column names |
 | `--schema` | `public` | Schema for an unqualified table name |
 | `--batch-size` | `20000` | Rows inserted per transaction |
 | `--overwrite` | off | `TRUNCATE` the table before importing |
 
-**Headers behaviour:** with `--headers`, the first row names the columns and is not
-imported — column order in the file does not need to match the table. Without it,
-every row is data and columns are matched positionally against the target table.
+**Headers behaviour:** with the default, the first row names the columns and is not
+imported — column order in the file does not need to match the table. With
+`--headers=false`, every row is data and columns are matched positionally against
+the target table. The defaults on both `export csv` and `import csv` match, so a
+file exported without flags imports without flags.
 
 **Empty fields** become SQL `NULL`, which is what `export csv` writes for a `NULL`.
 A genuinely empty string and a `NULL` are indistinguishable in CSV, so an empty
@@ -320,6 +333,11 @@ pgtransfer export dump prod users_backup.sql --table users --table orders
 Formats in short: `plain` is readable SQL you can edit and feed to `psql`;
 `custom` is compressed and lets `pg_restore` pick objects selectively; `directory`
 allows parallel restore; `tar` is the legacy archive format.
+
+The dump file is flushed to disk before the command reports success, and a dump
+that fails partway is deleted rather than left behind as a truncated file that
+looks like a backup. `--verbose` prints the `pg_dump` command with the password
+in the connection URL replaced by `***`.
 
 ### Restore a dump
 
@@ -374,6 +392,7 @@ pgtransfer migrate database prod staging --target-database staging_copy
 | `--data-only` | off | Rows only; the target schema must already exist |
 | `--tables` | all | Comma-separated list of tables |
 | `--overwrite` | off | Replace existing objects in the target |
+| `--strict` | off | Abort on the first restore error instead of tolerating it |
 | `--validate` | off | Pre-flight check: reach both ends, and confirm any `--tables` exist in the source |
 | `--enable-rollback` | off | Back up the target before migrating, so you can roll back |
 | `--timeout` | `3600` | Abort after this many seconds |
@@ -389,7 +408,14 @@ pgtransfer migrate database prod staging --tables users,orders --enable-rollback
 
 # Fail before touching anything if a table is missing
 pgtransfer migrate database prod staging --tables users,orders --validate
+
+# Treat any restore error as a failed migration
+pgtransfer migrate database prod staging --strict
 ```
+
+The data reaches the target by dumping the source and restoring the dump, so the
+restore flags apply here too: without `--strict` a version-skew message is counted
+as a warning, and `--overwrite` drops existing objects before restoring.
 
 ### Roll back a migration
 
@@ -459,7 +485,7 @@ Both are for programs rather than people: one for scripts and CI, one for AI age
 Pass `--json` before the subcommand, or set `PGTRANSFER_JSON=1`:
 
 ```bash
-pgtransfer --json export csv prod users users.csv --headers
+pgtransfer --json export csv prod users users.csv
 PGTRANSFER_JSON=1 pgtransfer profile list
 ```
 
@@ -526,6 +552,9 @@ For Claude Desktop, add this to `claude_desktop_config.json`:
 | `test_connection` | Test connectivity, optionally through a tunnel |
 | `export_csv` | Export a table or a query to CSV |
 | `import_csv` | Import a CSV, optionally truncating first |
+
+The CSV tools take the same defaults as the CLI: `headers` is on unless set to
+false, and `batch_size` is 20000.
 | `export_dump` | Create a `pg_dump` backup |
 | `import_dump` | Restore a dump |
 | `migrate_database` | Migrate between databases or profiles |
@@ -659,7 +688,11 @@ Passwords are never written to the log.
 
 - **Credentials** are stored in `~/.pgtransfer/config.yaml` with mode `0600`, and
   never echoed to the terminal, written to logs, or included in `--json` or MCP
-  output.
+  output. `--verbose` prints the underlying `pg_dump` command with the password in
+  the connection URL replaced by `***`.
+- **Table and column names** are quoted as SQL identifiers wherever they reach a
+  statement, so a name containing a quote, a semicolon or SQL text cannot alter the
+  statement it appears in.
 - **SSH host keys** are not currently verified — connections accept any host key, to
   keep first-time setup simple. If you rely on a tunnel to protect production
   credentials, verify the bastion's host key out of band first, or use a network

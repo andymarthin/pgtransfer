@@ -86,6 +86,12 @@ func boolean(description string) map[string]any {
 	return map[string]any{"type": "boolean", "description": description}
 }
 
+// booleanDefault is a JSON Schema boolean property with a default, so a client
+// that omits it is told what it will get instead of having to guess.
+func booleanDefault(description string, def bool) map[string]any {
+	return map[string]any{"type": "boolean", "description": description, "default": def}
+}
+
 // decodeInput unmarshals raw MCP arguments into v.
 func decodeInput(raw json.RawMessage, v any) error {
 	if len(raw) == 0 {

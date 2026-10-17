@@ -30,8 +30,8 @@ func registerExportCSV(srv *mcp.Server) {
 			"table":       str("Table to export, e.g. \"users\" or \"myschema.users\". Required unless query is set."),
 			"query":       str("Custom SELECT query to export instead of a whole table."),
 			"output_file": str("Destination CSV path. Required."),
-			"headers":     boolean("Write a header row. Defaults to false."),
-			"batch_size":  integer("Rows per batch. Defaults to 500."),
+			"headers":     booleanDefault("Write a header row.", true),
+			"batch_size":  integer("Rows per batch. Defaults to 20000."),
 			"overwrite":   boolean("Overwrite the output file if it exists. Defaults to false."),
 		}, "output_file"),
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -54,7 +54,12 @@ func registerExportCSV(srv *mcp.Server) {
 			return failResult("invalid_input", "either table or query must be provided")
 		}
 		if in.BatchSize <= 0 {
-			in.BatchSize = 500
+			in.BatchSize = io.DefaultBatchSize
+		}
+		// Export appends ".csv" when the path has no extension, so the guard
+		// has to check the path that will be written, not the one supplied.
+		if in.Query == "" {
+			in.OutputFile = io.CSVOutputPath(in.OutputFile)
 		}
 		if _, err := os.Stat(in.OutputFile); err == nil && !in.Overwrite {
 			return failResult("file_exists",
@@ -109,9 +114,9 @@ func registerImportCSV(srv *mcp.Server) {
 			"profile":    str("Saved profile name. Omit to use the active profile."),
 			"table":      str("Destination table, e.g. \"users\" or \"myschema.users\". Required."),
 			"input_file": str("Source CSV path. Required."),
-			"headers":    boolean("Treat the first row as a header. Defaults to false."),
+			"headers":    booleanDefault("Treat the first row as a header.", true),
 			"truncate":   boolean("Truncate the table before importing. Defaults to false."),
-			"batch_size": integer("Rows per batch. Defaults to 500."),
+			"batch_size": integer("Rows per batch. Defaults to 20000."),
 		}, "table", "input_file"),
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var in struct {
@@ -129,7 +134,7 @@ func registerImportCSV(srv *mcp.Server) {
 			return failResult("invalid_input", "table and input_file are required")
 		}
 		if in.BatchSize <= 0 {
-			in.BatchSize = 500
+			in.BatchSize = io.DefaultBatchSize
 		}
 		if _, err := os.Stat(in.InputFile); err != nil {
 			return failResult("file_not_found", fmt.Sprintf("input file %q not found", in.InputFile))

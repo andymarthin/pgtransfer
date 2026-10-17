@@ -24,7 +24,21 @@ type MigrationOptions struct {
 	Verbose        bool
 	Timeout        int
 	Overwrite      bool
+	Strict         bool
 	BatchSize      int
+}
+
+// restoreOptionsFor derives the restore options for a migration.
+//
+// The migration's --strict has to reach pg_restore, otherwise a migration that
+// was asked to fail on the first error would tolerate every restore error the
+// same way a plain restore does, and a half-restored target would be reported
+// as a successful migration.
+func restoreOptionsFor(opts *MigrationOptions) *RestoreOptions {
+	return &RestoreOptions{
+		Clean:  opts.Overwrite,
+		Strict: opts.Strict,
+	}
 }
 
 // MigrateDatabaseWithOptions performs database migration with specified options
@@ -324,7 +338,7 @@ func performMigration(opts *MigrationOptions) error {
 	importBar := NewProgressBarWithTimer(0, importDescription)
 	// Honour the overwrite flag by asking pg_restore to drop existing
 	// objects (--clean --if-exists) before recreating them.
-	restoreOpts := &RestoreOptions{Clean: opts.Overwrite}
+	restoreOpts := restoreOptionsFor(opts)
 	if err := RestoreDatabaseSmartWithOptions(targetURL, tempDumpFile, restoreOpts); err != nil {
 		importBar.Finish()
 		return fmt.Errorf("failed to import to target database: %w", err)
@@ -390,7 +404,7 @@ func performMigrationWithConnection(opts *MigrationOptions) error {
 
 	importBar := NewProgressBarWithTimer(0, importDescription)
 	// Honour the overwrite flag for connection-aware restores as well.
-	restoreOpts := &RestoreOptions{Clean: opts.Overwrite}
+	restoreOpts := restoreOptionsFor(opts)
 	if err := RestoreDatabaseWithConnectionAndOptions(opts.TargetProfile, tempDumpFile, restoreOpts); err != nil {
 		importBar.Finish()
 		return fmt.Errorf("failed to import to target database: %w", err)

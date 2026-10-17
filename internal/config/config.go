@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"gopkg.in/yaml.v3"
@@ -173,15 +174,30 @@ func BuildDSN(p Profile) string {
 
 	// URL-encode user, password and database name so that special characters
 	// (e.g. '@', ':', '/', '?') do not corrupt the connection URL.
+	//
+	// url.UserPassword is used for the credentials rather than QueryEscape:
+	// QueryEscape encodes a space as "+", which is only a space in a query
+	// string. lib/pq parses the userinfo block with url.PathUnescape semantics,
+	// where "+" is a literal plus, so a password containing a space became a
+	// password containing "+" and authentication failed with no clue why.
+	// UserPassword percent-encodes the space as %20.
 	return fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		url.QueryEscape(p.User),
-		url.QueryEscape(p.Password),
-		p.Host,
+		"postgres://%s@%s:%d/%s?sslmode=%s",
+		url.UserPassword(p.User, p.Password).String(),
+		formatHost(p.Host),
 		port,
 		url.PathEscape(p.Database),
 		url.QueryEscape(ssl),
 	)
+}
+
+// formatHost renders the host for a URL, bracketing an IPv6 literal so that its
+// colons are not read as the port separator.
+func formatHost(host string) string {
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 func ProfileExists(name string) (bool, error) {
