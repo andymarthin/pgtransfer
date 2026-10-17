@@ -150,3 +150,55 @@ jobs:
       - name: SSH server logs (on failure)
         if: failure()
         run: docker logs pgtransfer-ssh || true
+
+  installer:
+    name: Install script
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Shell syntax
+        run: |
+          sh -n scripts/install.sh
+          bash -n scripts/install.sh
+
+      - name: Installer refuses a tampered archive
+        run: |
+          # Verify the installer's checksum gate: given an archive whose bytes
+          # do not match the published SHA256SUMS, it must abort.
+          work=$(mktemp -d)
+          cd "$work"
+
+          version=$(curl -fsSL https://api.github.com/repos/andymarthin/pgtransfer/releases/latest \
+            | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+          asset="pgtransfer-${version}-linux-amd64.tar.gz"
+
+          curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/${version}/${asset}"
+          printf 'tampered' >> "${asset}"
+          curl -fsSL -o SHA256SUMS \
+            "https://github.com/andymarthin/pgtransfer/releases/download/${version}/SHA256SUMS"
+
+          expected=$(awk -v a="$asset" '$2 == a {print $1}' SHA256SUMS)
+          actual=$(sha256sum "${asset}" | awk '{print $1}')
+
+          if [ -z "$expected" ]; then
+            echo "no checksum published for ${asset}" >&2
+            exit 1
+          fi
+          if [ "$expected" = "$actual" ]; then
+            echo "tampered archive still matched its checksum" >&2
+            exit 1
+          fi
+          echo "checksum gate verified: ${expected} != ${actual}"
+
+      - name: Installer installs the latest release
+        run: |
+          PGTRANSFER_INSTALL="$RUNNER_TEMP/bin" PGTRANSFER_NO_SUDO=1 sh scripts/install.sh
+          "$RUNNER_TEMP/bin/pgtransfer" version
+          "$RUNNER_TEMP/bin/pgtransfer" version | grep -q "pgtransfer v"
+
+      - name: Installer installs the latest release
+        run: |
+          PGTRANSFER_INSTALL="$RUNNER_TEMP/bin" PGTRANSFER_NO_SUDO=1 sh scripts/install.sh
+          "$RUNNER_TEMP/bin/pgtransfer" version
+          "$RUNNER_TEMP/bin/pgtransfer" version | grep -q "pgtransfer v"
