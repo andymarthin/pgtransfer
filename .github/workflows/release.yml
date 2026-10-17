@@ -164,7 +164,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: Release ${{ steps.version.outputs.VERSION }}
           body_path: release-body.md
-          draft: true
+          draft: false
           prerelease: false
           files: |
             artifacts/**/*.tar.gz
@@ -176,16 +176,12 @@ jobs:
       # -----------------------------------------------------------------------
       # 4. Ask the Homebrew tap to pick up the new version.
       #
-      #    This is a best-effort notification. It is skipped when the tap
-      #    token is not configured, and the tap also polls daily, so a missed
-      #    dispatch self-heals.
+      #    The release above is published (draft: false), so the archives and
+      #    SHA256SUMS are publicly downloadable by the time this runs and the
+      #    tap can verify the checksums immediately.
       #
-      #    NOTE: the release above is created as a *draft*. A draft's assets
-      #    are not publicly downloadable, so dispatching now would only work
-      #    after the draft is published. When the draft is published, re-run
-      #    this workflow (or let the tap's daily schedule pick it up). If you
-      #    switch the release to `draft: false`, this fires immediately and
-      #    correctly.
+      #    Best-effort: skipped when the token is not configured, and the tap
+      #    also polls daily, so a missed dispatch self-heals within a day.
       # -----------------------------------------------------------------------
       - name: Notify Homebrew tap
         continue-on-error: true
