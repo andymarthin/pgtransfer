@@ -191,12 +191,95 @@ if installed_version=$("${install_dir}/${BIN}" version 2>/dev/null | head -n1); 
     ok "$installed_version"
 fi
 
+# --- optional dependency check ---------------------------------------------
+# pgtransfer itself is installed. These tools are only needed for some commands,
+# so they are reported as guidance rather than treated as install failures.
+
+missing_pg=""
+for tool in pg_dump pg_restore psql; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing_pg="${missing_pg}${missing_pg:+ }${tool}"
+    fi
+done
+
+missing_ssh=""
+if ! command -v ssh >/dev/null 2>&1; then
+    missing_ssh=ssh
+fi
+
+# Detect the package manager so the advice is copy-pasteable.
+pkg_hint() {
+    if [ "$os_name" = "darwin" ]; then
+        echo "brew install postgresql@17"
+        return
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "sudo apt-get update && sudo apt-get install -y postgresql-client"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "sudo dnf install -y postgresql"
+    elif command -v yum >/dev/null 2>&1; then
+        echo "sudo yum install -y postgresql"
+    elif command -v apk >/dev/null 2>&1; then
+        echo "sudo apk add postgresql-client"
+    elif command -v pacman >/dev/null 2>&1; then
+        echo "sudo pacman -S postgresql"
+    elif command -v zypper >/dev/null 2>&1; then
+        echo "sudo zypper install postgresql-client"
+    else
+        echo "install the PostgreSQL client tools with your package manager"
+    fi
+}
+
+ssh_hint() {
+    if [ "$os_name" = "darwin" ]; then
+        echo "ssh is part of macOS; install the Xcode command line tools if missing: xcode-select --install"
+        return
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "sudo apt-get update && sudo apt-get install -y openssh-client"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "sudo dnf install -y openssh-clients"
+    elif command -v yum >/dev/null 2>&1; then
+        echo "sudo yum install -y openssh-clients"
+    elif command -v apk >/dev/null 2>&1; then
+        echo "sudo apk add openssh-client"
+    elif command -v pacman >/dev/null 2>&1; then
+        echo "sudo pacman -S openssh"
+    elif command -v zypper >/dev/null 2>&1; then
+        echo "sudo zypper install openssh-clients"
+    else
+        echo "install an OpenSSH client with your package manager"
+    fi
+}
+
+if [ -z "$missing_pg" ] && [ -z "$missing_ssh" ]; then
+    ok "PostgreSQL client tools and an SSH client are both available"
+else
+    printf '\n' >&2
+    if [ -n "$missing_pg" ]; then
+        warn "Missing PostgreSQL client tool(s): ${missing_pg}"
+        cat >&2 <<EOF
+    Needed for: pgtransfer export dump / import dump / migrate
+    Install with:
+        $(pkg_hint)
+EOF
+    fi
+    if [ -n "$missing_ssh" ]; then
+        warn "Missing SSH client: ${missing_ssh}"
+        cat >&2 <<EOF
+    Needed for: profiles with SSH tunnels enabled
+    Install with:
+        $(ssh_hint)
+EOF
+    fi
+    printf '\n%s  This is only required for those commands; pgtransfer itself is installed and ready.%s\n' "$C_INFO" "$C_RESET" >&2
+fi
+
 cat >&2 <<'EOF'
 
 Next steps:
   pgtransfer profile add <name>        # create a connection profile
   pgtransfer test-connection <name>    # verify the connection
-
-Dump and restore need the PostgreSQL client tools (pg_dump, pg_restore, psql)
-on your PATH; SSH tunnels need an OpenSSH client.
+  pgtransfer --json version            # machine-readable output for scripts
+  pgtransfer mcp                       # run as an MCP server for AI agents
 EOF

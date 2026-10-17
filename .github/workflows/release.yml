@@ -132,7 +132,14 @@ jobs:
           # Prefer a hand-written RELEASE_NOTES.md when present; otherwise fall
           # back to an auto-generated changelog.
           if [ -f RELEASE_NOTES.md ]; then
-            cp RELEASE_NOTES.md release-body.md
+            # Strip any hand-written Downloads section: the workflow appends a
+            # canonical one below (generated from the version), so keeping both
+            # would duplicate the section in the published notes.
+            awk '
+              /^##[[:space:]]+[Dd]ownloads[[:space:]]*$/ { skip = 1; next }
+              skip && /^##[[:space:]]/ { skip = 0 }
+              !skip { print }
+            ' RELEASE_NOTES.md > release-body.md
           else
             PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
             if [ -n "$PREV_TAG" ]; then
@@ -146,6 +153,9 @@ jobs:
             fi
           fi
 
+          # Drop trailing blank lines so the appended section is spaced cleanly.
+          printf '%s\n' "$(cat release-body.md)" > release-body.md
+
           echo "" >> release-body.md
           echo "## Downloads" >> release-body.md
           echo "" >> release-body.md
@@ -155,8 +165,13 @@ jobs:
           echo "- **Linux (ARM64)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz\`" >> release-body.md
           echo "- **macOS (Intel)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz\`" >> release-body.md
           echo "- **macOS (Apple Silicon)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz\`" >> release-body.md
+          echo "- **Installer**: \`install.sh\`" >> release-body.md
+          echo "- **Checksums**: \`SHA256SUMS\`" >> release-body.md
           echo "" >> release-body.md
           echo "Verify downloads against the attached \`SHA256SUMS\`." >> release-body.md
+
+          echo "----- release body -----"
+          cat release-body.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
