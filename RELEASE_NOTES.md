@@ -1,130 +1,101 @@
-# PGTransfer v1.2.0
+# PGTransfer v1.2.1
 
-An automation- and distribution-focused release. This version makes pgtransfer
-scriptable and AI-drivable with machine-readable `--json` output and a Model
-Context Protocol server, and makes it far easier to install with prebuilt
-binaries, a one-line install script, and a Homebrew tap.
+A correctness release. Four audits of the data paths turned up ways the tool could
+lose rows, overwrite a file it said it would not touch, or report a success it had
+not achieved. All of them are fixed, and the README documents the behaviour that
+resulted.
 
-## ✨ New features
+Upgrade if you use CSV export or import, restores, SSH tunnels, or passwords that
+contain spaces.
 
-### Machine-readable `--json` output
+## 🔧 Fixes
 
-Every command accepts a global `--json` flag (or `PGTRANSFER_JSON=1`) and emits
-a single, stable JSON object on stdout instead of human-friendly text:
+### Export no longer loses rows
 
-```json
-{
-  "ok": true,
-  "command": "export csv",
-  "data": { "rows": 250, "output_file": "out.csv" },
-  "error": null
-}
-```
+Pagination used `LIMIT`/`OFFSET`, which PostgreSQL does not promise to keep stable
+between queries — rows could be duplicated and, worse, silently skipped. Export now
+pages on the table's single-column unique key with `ORDER BY`, so every batch is a
+disjoint window. Measured on 10,000,000 rows:
 
-On failure `ok` is `false` and `error` carries a stable code and message:
+| | Before | After |
+| --- | --- | --- |
+| 1M rows | 24.88s, 367,791 rows lost | 1.64s, complete |
+| 5M rows | 14m05s, 1,839,548 rows lost | 9.79s, complete |
+| 10M rows | — | 16.97s, complete |
 
-```json
-{
-  "ok": false,
-  "command": "test-connection",
-  "error": { "code": "profile_not_found", "message": "profile \"ghost\" not found" }
-}
-```
+Both export paths also failed to check `rows.Err()`, so a dropped connection or a
+cancelled statement ended the loop exactly as a finished table does. A truncated
+file was reported as a successful export.
 
-- Wired into `version`, `test-connection`, `profile list|active|use|delete`,
-  `export csv|dump`, `import csv|dump` and `migrate database|rollback`.
-- Exactly **one** JSON object is written per invocation, including parser-level
-  failures such as an unknown subcommand or an invalid flag
-  (`code: "usage_error"`).
-- The process still exits non-zero on failure.
-- Stable error codes: `usage_error`, `profile_not_found`, `no_active_profile`,
-  `config_load_failed`, `connection_failed`, `export_failed`, `import_failed`,
-  `dump_failed`, `restore_failed`, `migration_failed`, `rollback_failed`,
-  `file_exists`, `file_not_found`, `truncate_failed`, `invalid_input`.
-- **Passwords are never emitted.** Profiles report `has_password` instead.
+### A failed restore no longer reports success
 
-### MCP server for AI agents
+`pg_restore` exits with status 1 both for benign client/server version skew and for
+a table that failed to load. Every exit status of 1 used to be treated as "restored
+with warnings", so a restore that silently dropped a table printed a warning and
+returned success. Restore output is classified line by line instead: known
+version-skew messages stay warnings and are counted, and anything else fails the
+command and names the offending line. `--strict` also passes `--exit-on-error`.
 
-`pgtransfer mcp` runs a
-[Model Context Protocol](https://modelcontextprotocol.io) server over stdio, so
-AI hosts such as Claude Desktop, Cursor and custom agent runtimes can drive
-pgtransfer as typed tools.
+### Table and column names are quoted
 
-Exposed tools: `list_profiles`, `test_connection`, `export_csv`, `import_csv`,
-`export_dump`, `import_dump`, `migrate_database`.
+Names arrive from the command line, from profiles and from MCP tool arguments, and
+were interpolated into SQL unquoted. `lib/pq` sends zero-argument queries over the
+simple query protocol, which accepts several statements separated by semicolons, so
+a crafted table name could append its own statements. Every identifier is quoted
+now, and names that need quoting — mixed case, spaces, reserved words, dots — work
+as a side effect.
 
-```json
-{
-  "mcpServers": {
-    "pgtransfer": { "command": "pgtransfer", "args": ["mcp"] }
-  }
-}
-```
+### `--headers` defaults to on
 
-Tool failures are reported in-band (`isError: true` plus a structured payload)
-rather than as protocol errors, so a model can read the problem and correct
-itself. Because stdout carries the protocol, incidental library output is
-redirected to stderr.
+`export csv` and `import csv` both defaulted to off, so the obvious round trip wrote
+a header row that the importer then inserted as data. Both default to on;
+`--headers=false` imports or exports a header-less file. **If you rely on the old
+default, pass `--headers=false` explicitly.**
 
-### Install script
+### The overwrite guard checks the file it will write
 
-A POSIX `sh` installer downloads the binary for your platform, verifies it
-against the release's `SHA256SUMS` and installs it:
+Export appends `.csv` when the path has no extension, but the guard checked the path
+as typed. Exporting to `users` looked for a file called `users`, found none, and
+overwrote `users.csv`.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh | sh
-```
+### Credentials stay out of verbose output
 
-It installs to `/usr/local/bin` when writable, otherwise `~/.local/bin`, and is
-configurable via `PGTRANSFER_VERSION`, `PGTRANSFER_INSTALL` and
-`PGTRANSFER_NO_SUDO`. **It refuses to install an archive whose checksum does not
-match.**
+`--verbose` printed the whole `pg_dump` argument list, and the connection URL is one
+of the arguments. Passwords are replaced with `***` before printing.
 
-### Homebrew
+### Passwords containing spaces work
 
-```bash
-brew tap andymarthin/pgtransfer
-brew install pgtransfer
-```
+Connection strings were built with `url.QueryEscape`, which encodes a space as `+`.
+`lib/pq` reads the userinfo block with path semantics, where `+` is a literal plus,
+so the password silently became a different string. `url.UserPassword` is used now,
+and an IPv6 host is bracketed automatically.
 
-The formula lives in the
-[homebrew-pgtransfer](https://github.com/andymarthin/homebrew-pgtransfer) tap and
-updates itself from each release.
+### SSH tunnels are opened once, and verified
 
-## 🔧 Tooling & CI
+Dumping or restoring through a bastion dialled SSH twice — once to check the
+connection, once to build the tunnel — and the tunnel was rebound on a guessed free
+port after a fixed sleep. If another process took the port in between, the command
+was handed a port that accepted nothing and failed several steps later with an
+error that did not mention the tunnel. The tunnel now binds before it returns,
+listens on `127.0.0.1` only, and closes its listener, client and goroutine together.
 
-- **Releases are now published immediately** instead of being created as drafts,
-  so artifacts are downloadable as soon as the workflow finishes.
-- The release workflow notifies the Homebrew tap, which rewrites its formula
-  against the new `SHA256SUMS`.
-- **New performance-friendly CI triggers:** CI runs on pushes to `main` and on
-  all pull requests, so each change is verified once.
-- CI and Release share the same reusable pipeline (`reusable-ci.yml`), now with
-  an **Install script** job that verifies POSIX syntax, the checksum gate, and a
-  real install.
-- Runners pinned to `ubuntu-24.04`; GitHub Actions bumped to Node 24 runtimes.
+### Other fixes
 
-## ⬆️ Requirements
+- A dump is flushed to disk before success is reported, and a failed dump is
+  removed instead of being left behind looking like a backup.
+- `migrate database --strict` now affects the restore. It was accepted and ignored.
+- Import counted rows with `ReadAll`, needing several gigabytes of memory to draw a
+  progress bar on a large file. It streams now.
+- Import of a header-less file turned `NULL` into an empty string; the batched path
+  did not. Both match export now.
+- Every progress bar leaked a goroutine. One-shot CLI runs never noticed; a process
+  hosting the MCP server did.
+- Interactive `profile add` saved an empty password when the terminal read failed,
+  and stored `0` for an unparseable port. Both are errors now.
 
-- **Go 1.25 or higher** to build from source (the MCP SDK requires it). Prebuilt
-  binaries are unaffected.
-- `pg_dump`, `pg_restore` and `psql` on your `PATH` for dump/restore.
-- An OpenSSH client for SSH tunnels.
+## 📚 Docs
 
-## 📄 License
-
-The project is now shipped with its `LICENSE` file (MIT), which the README had
-always claimed but the repository was missing.
-
-## Downloads
-
-Choose the appropriate binary for your platform:
-
-- **Linux (x64)**: `pgtransfer-v1.2.0-linux-amd64.tar.gz`
-- **Linux (ARM64)**: `pgtransfer-v1.2.0-linux-arm64.tar.gz`
-- **macOS (Intel)**: `pgtransfer-v1.2.0-darwin-amd64.tar.gz`
-- **macOS (Apple Silicon)**: `pgtransfer-v1.2.0-darwin-arm64.tar.gz`
-- **Installer**: `install.sh`
-- **Checksums**: `SHA256SUMS`
-
-Verify downloads against the attached `SHA256SUMS`.
+The README is reordered around the tasks you actually perform — export, import,
+dump, restore, migrate — with a per-command flag table and an index, rather than
+around the source layout. Measured numbers live in
+[BENCHMARKS.md](https://github.com/andymarthin/pgtransfer/blob/main/BENCHMARKS.md).
