@@ -1,4 +1,3 @@
-
 # PGTransfer
 
 [![Go Version](https://img.shields.io/badge/Go-1.25+-blue.svg)](https://golang.org)
@@ -6,74 +5,462 @@
 [![CI](https://github.com/andymarthin/pgtransfer/actions/workflows/ci.yml/badge.svg)](https://github.com/andymarthin/pgtransfer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**PGTransfer** is a powerful, secure, and user-friendly command-line tool for PostgreSQL data operations. Built with Go, it provides seamless data import/export capabilities with advanced features like SSH tunneling, connection profiles, and interactive configuration.
-
-## 🎯 Key Highlights
-
-- **🔐 Secure SSH Tunneling**: Connect to remote databases through bastion hosts with full SSH tunnel support and local port forwarding
-- **⚡ Efficient Operations**: Optimized batch processing that handles large datasets while managing memory usage intelligently
-- **🛡️ Robust Security**: SSL/TLS encryption, SSH key authentication, and secure local credential storage
-- **🔄 Database Migration**: Complete schema and data migration between databases with automatic rollback capabilities
-- **📊 Intelligent Data Processing**: Proper handling of PostgreSQL data types with smart CSV formatting and conversion
-- **🤖 AI & Automation Ready**: Machine-readable `--json` output for every command and a built-in Model Context Protocol (MCP) server so agents can drive transfers directly
-
-## ✨ Features
-
-### Core Operations
-- **🔄 Data Transfer**: Import and export PostgreSQL tables to/from CSV format with intelligent data type handling
-- **🗄️ Database Dumps**: Complete database export/import using PostgreSQL's native tools (pg_dump/pg_restore)
-- **🗄️ Database Migration**: Full database migration with schema, data, and selective table transfer
-- **📊 Progress Tracking**: Real-time progress indicators with speed metrics and time estimates
-
-### Connection & Security
-- **🔐 SSH Tunneling**: Production-ready SSH tunnels with local port forwarding for external tools
-- **🛡️ SSL/TLS Support**: Configurable SSL modes for secure database connections
-- **🔑 Authentication**: Support for password, SSH key, and SSH agent authentication
-- **👤 Profile Management**: Reusable connection profiles with secure credential storage
-- **🖥️ Interactive Setup**: User-friendly interactive profile configuration with validation
-
-### Automation & AI
-- **🤖 JSON Output**: A global `--json` flag (or `PGTRANSFER_JSON=1`) emits a single, stable JSON envelope for every command
-- **🔌 MCP Server**: `pgtransfer mcp` runs a Model Context Protocol server over stdio, exposing transfers as typed tools for AI hosts
-- **🔒 Secret Redaction**: JSON output never includes passwords — profiles report `has_password` instead
-
-## 🤖 AI & Automation
-
-PGTransfer is designed to be driven by scripts, CI pipelines, and AI agents.
-
-### Machine-readable JSON output
-
-Pass the global `--json` flag (before the subcommand) to any command to receive a
-single JSON object on stdout instead of human-friendly text:
+Move PostgreSQL data between databases without writing scripts. Export tables to
+CSV, dump and restore whole databases, and migrate between environments — through
+an SSH bastion if you need one.
 
 ```bash
-pgtransfer --json version
-pgtransfer --json profile list
-pgtransfer --json test-connection myprofile
-pgtransfer --json export csv myprofile out.csv --table users --headers
+pgtransfer profile add prod          # save a connection once
+pgtransfer export csv prod users users.csv --headers
+pgtransfer migrate database prod staging
 ```
 
-The flag can also be enabled with an environment variable, which is convenient for
-agents that cannot easily change the command line:
+---
+
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Commands](#commands)
+  - [Profiles](#profiles)
+  - [Test a connection](#test-a-connection)
+  - [Export to CSV](#export-to-csv)
+  - [Import from CSV](#import-from-csv)
+  - [Dump a database](#dump-a-database)
+  - [Restore a dump](#restore-a-dump)
+  - [Migrate between databases](#migrate-between-databases)
+  - [Roll back a migration](#roll-back-a-migration)
+- [SSH tunnels](#ssh-tunnels)
+- [JSON output and MCP](#json-output-and-mcp)
+- [Data types and CSV format](#data-types-and-csv-format)
+- [Performance](#performance)
+- [Configuration](#configuration)
+- [Security notes](#security-notes)
+- [Development](#development)
+- [License](#license)
+
+---
+
+## Install
+
+### Prebuilt binary
+
+Download the archive for your platform from the
+[releases page](https://github.com/andymarthin/pgtransfer/releases/latest):
+
+| Platform | Asset |
+| --- | --- |
+| macOS (Apple Silicon) | `pgtransfer-<version>-darwin-arm64.tar.gz` |
+| macOS (Intel) | `pgtransfer-<version>-darwin-amd64.tar.gz` |
+| Linux x86-64 | `pgtransfer-<version>-linux-amd64.tar.gz` |
+| Linux ARM64 | `pgtransfer-<version>-linux-arm64.tar.gz` |
 
 ```bash
-export PGTRANSFER_JSON=1
-pgtransfer version        # emits JSON
+V=v1.2.0
+A=darwin-arm64                       # linux-amd64, linux-arm64, darwin-amd64
+curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/$V/pgtransfer-$V-$A.tar.gz"
+tar xzf "pgtransfer-$V-$A.tar.gz"
+sudo mv pgtransfer /usr/local/bin/
+pgtransfer version
 ```
 
-**The envelope** is identical for every command:
+Verify against the published checksums if you want to be sure:
+
+```bash
+curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/$V/SHA256SUMS"
+shasum -a 256 -c SHA256SUMS --ignore-missing   # Linux: sha256sum -c ...
+```
+
+### Install script
+
+Downloads the right binary, verifies it against the release checksums, and
+installs it.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh | sh
+```
+
+Installs to `/usr/local/bin` when writable, otherwise to `~/.local/bin` (and tells
+you how to add it to `PATH`). The script also checks for `pg_dump`, `pg_restore`,
+`psql` and an OpenSSH client, and prints the install command for your platform if
+any are missing.
+
+| Variable | Purpose |
+| --- | --- |
+| `PGTRANSFER_VERSION` | Release tag to install, e.g. `v1.2.0` (default: latest) |
+| `PGTRANSFER_INSTALL` | Install directory (default: `/usr/local/bin`, else `~/.local/bin`) |
+| `PGTRANSFER_NO_SUDO` | Set to `1` to never use `sudo` |
+
+Read it before piping to a shell if you prefer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh | less
+```
+
+### Homebrew
+
+```bash
+brew install andymarthin/pgtransfer/pgtransfer
+```
+
+Upgrade later with `brew update && brew upgrade pgtransfer`.
+
+### From source
+
+Requires Go 1.25 or higher.
+
+```bash
+go install github.com/andymarthin/pgtransfer@latest   # into $(go env GOPATH)/bin
+```
+
+or clone and build:
+
+```bash
+git clone https://github.com/andymarthin/pgtransfer.git
+cd pgtransfer
+go build -o pgtransfer .
+```
+
+### Requirements
+
+`pgtransfer` itself needs nothing beyond a PostgreSQL server. Two optional
+dependencies, checked by the install script:
+
+- **`pg_dump` / `pg_restore` / `psql`** — needed by `export dump`, `import dump`
+  and `migrate database`. CSV export and import do not use them.
+- **An OpenSSH client** — needed only for SSH tunnels.
+
+Client tools should be the same major version as the server, or newer.
+
+---
+
+## Quick start
+
+```bash
+# 1. Save a connection
+pgtransfer profile add prod
+
+# 2. Check it works
+pgtransfer test-connection prod
+
+# 3. Export a table
+pgtransfer export csv prod users users.csv --headers
+
+# 4. Copy a whole database to staging
+pgtransfer migrate database prod staging
+```
+
+Every command accepts `--json` for scripted use, and `--help` for its full flag
+list:
+
+```bash
+pgtransfer --help
+pgtransfer export csv --help
+```
+
+---
+
+## Commands
+
+### Profiles
+
+A profile is a saved connection stored in `~/.pgtransfer/config.yaml`. Create one
+interactively:
+
+```bash
+pgtransfer profile add prod
+```
+
+You will be prompted for the database host, port, name, user, password and SSL
+mode, and optionally for SSH tunnel settings. Every prompt shows a default in
+brackets; press Enter to accept it.
+
+Create one in a single command instead:
+
+```bash
+pgtransfer profile add prod \
+  --user app_user \
+  --password 'secret' \
+  --host db.example.com \
+  --port 5432 \
+  --database myapp \
+  --sslmode require
+```
+
+List, inspect and remove profiles:
+
+```bash
+pgtransfer profile list
+pgtransfer profile list --json          # includes has_password, never the password
+pgtransfer profile delete prod
+```
+
+Passing an existing profile name to `profile add` shows the current values as
+defaults and asks before overwriting. `--force` skips the prompt, `--skip-test`
+skips the connection check afterwards.
+
+### Test a connection
+
+```bash
+pgtransfer test-connection prod
+```
+
+Reports whether the connection is direct or tunnelled, the server version, the
+latency, and — for a tunnel — the local port you can point other tools at.
+
+```bash
+pgtransfer test-connection prod --json
+```
+
+### Export to CSV
+
+```bash
+# Whole table, with a header row
+pgtransfer export csv prod public.users users.csv --headers
+
+# Positional form also works: [profile] [table] [output]
+pgtransfer export csv prod users users.csv --headers
+
+# Another schema
+pgtransfer export csv prod users users.csv --schema reporting --headers
+
+# Only some rows
+pgtransfer export csv prod active.csv \
+  --query "SELECT id, email, created_at FROM users WHERE active = true" \
+  --headers
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--headers` | off | Write a header row as the first line |
+| `--schema` | `public` | Schema for an unqualified table name |
+| `--batch-size` | `20000` | Rows fetched per query |
+| `--query` | — | Export the result of a SQL query instead of a table |
+| `--overwrite` | off | Replace the file if it already exists |
+
+The output file gets a `.csv` extension if you omit one. Export refuses to
+overwrite an existing file unless `--overwrite` is given.
+
+`--query` runs your SQL as written, so it can be any `SELECT` — joins, aggregates,
+expressions. It is executed as a single statement.
+
+### Import from CSV
+
+```bash
+# Header row names the columns
+pgtransfer import csv prod public.users users.csv --headers
+
+# Header-less file: columns are matched by position
+pgtransfer import csv prod public.users users.csv
+
+# Replace the table contents first
+pgtransfer import csv prod public.users users.csv --headers --overwrite
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--headers` | off | Treat the first row as column names |
+| `--schema` | `public` | Schema for an unqualified table name |
+| `--batch-size` | `20000` | Rows inserted per transaction |
+| `--overwrite` | off | `TRUNCATE` the table before importing |
+
+**Headers behaviour:** with `--headers`, the first row names the columns and is not
+imported — column order in the file does not need to match the table. Without it,
+every row is data and columns are matched positionally against the target table.
+
+**Empty fields** become SQL `NULL`, which is what `export csv` writes for a `NULL`.
+A genuinely empty string and a `NULL` are indistinguishable in CSV, so an empty
+field always round-trips as `NULL`.
+
+**Overwrite** truncates the table before the first batch. If the import then fails,
+the table is left empty — check the row count in the result before assuming success.
+
+### Dump a database
+
+Wraps `pg_dump`. Use this when you want a real backup or a full transfer including
+sequences, indexes, constraints and ownership.
+
+```bash
+# Plain SQL
+pgtransfer export dump prod backup_$(date +%Y%m%d).sql
+
+# Custom format, compressed — smaller and restores faster
+pgtransfer export dump prod backup.dump --format custom --compress
+
+# Schema only
+pgtransfer export dump prod schema.sql --schema-only
+
+# Data only
+pgtransfer export dump prod data.sql --data-only
+
+# Selected tables
+pgtransfer export dump prod users_backup.sql --table users --table orders
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--format` | `plain` | `plain`, `custom`, `directory` or `tar` |
+| `--compress` | off | Compress the archive (not valid for `plain`) |
+| `--schema-only` | off | Structure only, no rows |
+| `--data-only` | off | Rows only, no structure |
+| `--table` | — | Include a table; repeatable |
+| `--exclude-table` | — | Exclude a table; repeatable |
+| `--schema` | — | Limit to one schema |
+| `--timeout` | none | Abort after this many seconds |
+| `--overwrite` | off | Replace an existing output file |
+| `--verbose` | off | Print the underlying `pg_dump` command |
+
+Formats in short: `plain` is readable SQL you can edit and feed to `psql`;
+`custom` is compressed and lets `pg_restore` pick objects selectively; `directory`
+allows parallel restore; `tar` is the legacy archive format.
+
+### Restore a dump
+
+```bash
+pgtransfer import dump staging backup.sql
+
+# Custom format, dropping existing objects first
+pgtransfer import dump staging backup.dump --clean
+
+# Fail on the first error instead of tolerating version skew
+pgtransfer import dump staging backup.sql --strict --timeout 300
+
+# See what pg_restore is doing
+pgtransfer import dump staging backup.dump --verbose
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--clean` | off | Drop existing objects before restoring (binary formats) |
+| `--strict` | off | Stop at the first error |
+| `--timeout` | none | Abort after this many seconds |
+| `--verbose` | off | Print the underlying command |
+
+The format is detected from the file, so you do not have to say whether it is plain
+SQL or a `pg_dump` archive.
+
+Without `--strict`, restore tolerates errors caused by client and server version
+differences — an older `psql` meeting a newer dump, for example. The summary reports
+how many errors were ignored. Use `--strict` when a partially restored database is
+worse than no database.
+
+### Migrate between databases
+
+Copies a whole database from one place to another. Two ways to name the endpoints:
+
+```bash
+# Two profiles
+pgtransfer migrate database prod staging
+
+# One profile, two database names on the same server
+pgtransfer migrate database dev --source-database app_old --target-database app_new
+
+# Mixed: override one side of a two-profile migration
+pgtransfer migrate database prod staging --target-database staging_copy
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--schema-only` | off | Structure only |
+| `--data-only` | off | Rows only; the target schema must already exist |
+| `--tables` | all | Comma-separated list of tables |
+| `--overwrite` | off | Replace existing objects in the target |
+| `--validate` | off | Pre-flight check: reach both ends, and confirm any `--tables` exist in the source |
+| `--enable-rollback` | off | Back up the target before migrating, so you can roll back |
+| `--timeout` | `3600` | Abort after this many seconds |
+| `--batch-size` | `1000` | Rows per batch for data migration |
+| `--verbose` | off | Print the underlying commands |
+
+```bash
+# Schema only, for a fresh development database
+pgtransfer migrate database prod dev --schema-only
+
+# Some tables, with a backup you can roll back to
+pgtransfer migrate database prod staging --tables users,orders --enable-rollback
+
+# Fail before touching anything if a table is missing
+pgtransfer migrate database prod staging --tables users,orders --validate
+```
+
+### Roll back a migration
+
+```bash
+pgtransfer migrate rollback staging /path/to/backup.dump
+```
+
+Restores a backup taken before a migration, undoing the changes it made. The backup
+is the file named by `--enable-rollback` when the migration ran, under
+`~/.pgtransfer/backups/`. Add `--verbose` to see the underlying restore command, or
+`--timeout` to bound it.
+
+---
+
+## SSH tunnels
+
+A profile can reach its database through a bastion host. `pgtransfer` opens the
+tunnel for the duration of the command and closes it afterwards — nothing to
+supervise.
+
+```bash
+pgtransfer profile add prod \
+  --host localhost \
+  --port 5432 \
+  --database myapp \
+  --user app_user \
+  --ssh-host bastion.example.com \
+  --ssh-user deploy \
+  --ssh-key ~/.ssh/production_key
+```
+
+The database host is resolved **from the bastion's point of view**. `localhost`
+means the bastion itself; use the database's real hostname or private IP if it is
+elsewhere on that network.
+
+Three ways to authenticate to the bastion, tried in this order:
+
+| Method | How | Notes |
+| --- | --- | --- |
+| SSH agent | `ssh-add` (uses `SSH_AUTH_SOCK`) | Tried automatically; no flag needed |
+| Key file | `--ssh-key ~/.ssh/id_rsa` | Add `--ssh-passphrase` if the key is encrypted |
+| Password | `--ssh-password` | Least secure; omit the flag to be prompted |
+
+Verify a tunnel:
+
+```bash
+pgtransfer test-connection prod
+```
+
+The output includes the local port the tunnel is forwarding on, e.g.
+`localhost:5433`, so you can point `psql`, pgAdmin or DBeaver at the same database
+while a command is running.
+
+---
+
+## JSON output and MCP
+
+Both are for programs rather than people: one for scripts and CI, one for AI agents.
+
+### JSON output
+
+Pass `--json` before the subcommand, or set `PGTRANSFER_JSON=1`:
+
+```bash
+pgtransfer --json export csv prod users users.csv --headers
+PGTRANSFER_JSON=1 pgtransfer profile list
+```
+
+Every command returns the same envelope:
 
 ```json
 {
   "ok": true,
   "command": "export csv",
-  "data": { "rows": 250, "output_file": "out.csv" },
+  "data": { "rows": 250, "output_file": "users.csv" },
   "error": null
 }
 ```
 
-On failure `ok` is `false`, `data` is omitted, and `error` carries a stable
-machine-readable code:
+On failure `ok` is `false`, `data` is omitted, and `error` carries a stable code:
 
 ```json
 {
@@ -86,28 +473,27 @@ machine-readable code:
 }
 ```
 
-The process always exits non-zero on failure, and **exactly one** JSON object is
-written per invocation — including for parser-level problems such as an unknown
-subcommand or a bad flag (`code: "usage_error"`).
+Exactly one object is written per invocation — including for usage errors such as an
+unknown subcommand or a bad flag — and the exit status is non-zero on failure.
 
-Stable error codes include: `usage_error`, `profile_not_found`,
-`no_active_profile`, `config_load_failed`, `connection_failed`, `export_failed`,
-`import_failed`, `dump_failed`, `restore_failed`, `migration_failed`,
-`rollback_failed`, `file_exists`, `file_not_found`, `truncate_failed`,
-`invalid_input`.
+Codes you can branch on: `usage_error`, `profile_not_found`, `no_active_profile`,
+`config_load_failed`, `connection_failed`, `export_failed`, `import_failed`,
+`dump_failed`, `restore_failed`, `migration_failed`, `rollback_failed`,
+`file_exists`, `file_not_found`, `truncate_failed`, `invalid_input`.
 
-### MCP server (AI agent integration)
+Passwords never appear in JSON output. Profiles report `has_password: true/false`.
+
+### MCP server
 
 `pgtransfer mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io)
-server over stdio. AI hosts (Claude Desktop, Cursor, custom agent runtimes) can
-then call pgtransfer capabilities as native typed tools.
+server over stdio, exposing the commands above as typed tools that an AI host can
+call directly.
 
 ```bash
 pgtransfer mcp
 ```
 
-Register it with an MCP host — for Claude Desktop, add this to
-`claude_desktop_config.json`:
+For Claude Desktop, add this to `claude_desktop_config.json`:
 
 ```json
 {
@@ -120,982 +506,89 @@ Register it with an MCP host — for Claude Desktop, add this to
 }
 ```
 
-**Exposed tools**
-
 | Tool | Purpose |
 | --- | --- |
 | `list_profiles` | List saved profiles (never returns passwords) |
-| `test_connection` | Test connectivity, optionally through an SSH tunnel |
-| `export_csv` | Export a table or a custom query to CSV |
-| `import_csv` | Import a CSV into a table, optionally truncating first |
-| `export_dump` | Create a `pg_dump` backup (plain/custom/tar/directory) |
-| `import_dump` | Restore a dump, tolerating benign version skew by default |
-| `migrate_database` | Migrate schema/data between databases or profiles |
+| `test_connection` | Test connectivity, optionally through a tunnel |
+| `export_csv` | Export a table or a query to CSV |
+| `import_csv` | Import a CSV, optionally truncating first |
+| `export_dump` | Create a `pg_dump` backup |
+| `import_dump` | Restore a dump |
+| `migrate_database` | Migrate between databases or profiles |
 
-Tool failures are reported in-band with `isError: true` and a structured
-`{"ok": false, "error": {"code", "message"}}` payload, so a model can read the
-problem and correct itself rather than seeing an opaque protocol error.
+Tool failures come back in-band with `isError: true` and the same
+`{"ok": false, "error": {...}}` payload, so a model can read the problem and correct
+itself rather than seeing an opaque protocol error.
 
-Because stdout carries the MCP protocol, the server redirects any incidental
-library output to stderr; only protocol frames are ever written to stdout.
+stdout carries the protocol, so any incidental library output is redirected to
+stderr. Only protocol frames are ever written to stdout.
 
-## 🔐 SSH Tunnel Support
+---
 
-PGTransfer includes comprehensive SSH tunnel support with automatic port forwarding, allowing secure access to remote PostgreSQL databases through bastion hosts or jump servers.
+## Data types and CSV format
 
-### Key Features
+Values are written in a form PostgreSQL reads back without help.
 
-- **🔄 Automatic Port Management**: Dynamically allocates local ports and detects conflicts
-- **🔐 Multiple Authentication**: Supports password, SSH key, and SSH agent authentication
-- **🛠️ External Tool Integration**: Creates local port forwarding that works with pgAdmin, DBeaver, and other tools
-- **⚡ Connection Pooling**: Reuses tunnel connections efficiently across multiple operations
-- **🔍 Health Monitoring**: Automatically monitors tunnel health and recovers from connection issues
+| PostgreSQL type | Written as | Example |
+| --- | --- | --- |
+| `date` | `YYYY-MM-DD` | `2008-07-06` |
+| `timestamp` | `YYYY-MM-DD HH:MM:SS` | `2025-10-28 01:59:38` |
+| `timestamptz` | Same, converted to the session time zone | `2025-10-28 01:59:38` |
+| `numeric` / `decimal` | Decimal notation, scale preserved | `63942.00` |
+| `integer` / `bigint` | Plain number | `457719` |
+| `real` / `double precision` | Shortest round-trippable form | `3.14159` |
+| `text` / `varchar` | As-is, quoted only when the value needs it | `user_0457719` |
+| `boolean` | `true` / `false` | `true` |
+| `NULL` | Empty field | |
 
-### SSH Configuration Options
+A value that is exactly midnight is written as a bare date (`2008-07-06`), which
+PostgreSQL reads back into either a `date` or a `timestamp` column.
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| SSH Host | Remote server hostname/IP | Required |
-| SSH Port | SSH server port | 22 |
-| SSH Username | SSH user account | Current user |
-| Authentication | password/key/agent | Interactive |
-| Local Port | Local tunnel port | Auto-assigned |
-| Keep Alive | Tunnel persistence | 30s |
+Round-tripping through `export csv` and `import csv` preserves all of these,
+including `NULL` versus empty string (see [Import from CSV](#import-from-csv)).
 
-### Authentication Methods
+Sub-second precision is **not** preserved: timestamps are written to whole seconds.
+If you need exact values, use `export dump`, which uses `COPY` and is byte-exact.
 
-**1. SSH Key Authentication** (recommended)
-```bash
-# Use specific private key
-SSH Key Path: ~/.ssh/production_key
+---
 
-# Use default SSH key
-SSH Key Path: ~/.ssh/id_rsa
-```
+## Performance
 
-**2. SSH Agent Authentication**
-```bash
-# Uses keys loaded in SSH agent
-ssh-add ~/.ssh/production_key
-# Then select "SSH Agent" in profile setup
-```
+Export is paginated by the table's primary key rather than by `OFFSET`, so a large
+export costs the same per row at the end of the table as at the start.
 
-**3. Password Authentication**
-```bash
-# Interactive password prompt
-# Less secure, better to use keys when possible
-```
-
-### Example Setup
-
-```bash
-# Create production profile with SSH tunnel
-pgtransfer profile add prod-db
-
-# Configuration:
-# SSH Host: bastion.company.com
-# SSH Username: deploy
-# SSH Key: ~/.ssh/production_key
-# Database Host: localhost (via tunnel)
-# Database Port: 5433 (tunnel local port)
-# Target DB: db-internal.company.com:5432
-```
-
-### External Tool Integration
-
-Once a profile with SSH tunnel is configured, you can use the local port for external tools:
-
-```bash
-# Get tunnel info
-pgtransfer test-connection prod-db
-
-# Use with external tools
-pgadmin4 --host localhost --port 5433
-psql -h localhost -p 5433 -U username -d database
-```
-
-### Performance & Reliability
-- **⚡ Batch Processing**: High-performance batch operations with configurable batch sizes
-- **💾 Memory Efficient**: Streaming processing optimized for large datasets
-- **🔄 Rollback Support**: Automatic backup creation and rollback capabilities for migrations
-- **⏱️ Timeout Control**: Configurable timeouts for long-running operations
-- **📝 Comprehensive Logging**: Detailed JSON-formatted operation logs with performance metrics
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Go**: Version 1.25 or higher
-- **PostgreSQL**: Version 13 or higher (client tools: `pg_dump`, `pg_restore`, `psql`)
-- **SSH Client**: For SSH tunnel connections (OpenSSH recommended)
-
-### Installation
-
-#### Option A — prebuilt binary (no Go required)
-
-Download the archive for your platform from the
-[releases page](https://github.com/andymarthin/pgtransfer/releases/latest):
-
-| Platform | Asset |
-| --- | --- |
-| macOS (Apple Silicon) | `pgtransfer-<version>-darwin-arm64.tar.gz` |
-| macOS (Intel) | `pgtransfer-<version>-darwin-amd64.tar.gz` |
-| Linux x86-64 | `pgtransfer-<version>-linux-amd64.tar.gz` |
-| Linux ARM64 | `pgtransfer-<version>-linux-arm64.tar.gz` |
-
-For example, on macOS (Apple Silicon):
-
-```bash
-V=v1.1.0
-A=darwin-arm64
-curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/$V/pgtransfer-$V-$A.tar.gz"
-tar xzf "pgtransfer-$V-$A.tar.gz"
-sudo mv pgtransfer /usr/local/bin/
-pgtransfer version
-```
-
-Optionally verify the download against the published checksums:
-
-```bash
-curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/$V/SHA256SUMS"
-shasum -a 256 -c SHA256SUMS --ignore-missing   # Linux: sha256sum -c ...
-```
-
-#### Option B — install script (Linux, macOS)
-
-A self-contained shell installer downloads the right binary, verifies it against
-the release's `SHA256SUMS`, and installs it.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh | sh
-```
-
-It installs to `/usr/local/bin` when writable, otherwise to `~/.local/bin` (and
-tells you how to add that to your `PATH` if needed).
-
-Control the install with environment variables:
-
-```bash
-# pin a version
-curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh \
-  | PGTRANSFER_VERSION=v1.1.0 sh
-
-# choose the install directory (no sudo needed)
-curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh \
-  | PGTRANSFER_INSTALL="$HOME/bin" sh
-
-# never prompt for sudo (fail instead)
-curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh \
-  | PGTRANSFER_NO_SUDO=1 sh
-```
-
-| Variable | Purpose |
-| --- | --- |
-| `PGTRANSFER_VERSION` | Release tag to install, e.g. `v1.1.0` (default: latest) |
-| `PGTRANSFER_INSTALL` | Install directory (default: `/usr/local/bin`, else `~/.local/bin`) |
-| `PGTRANSFER_NO_SUDO` | Set to `1` to never use `sudo` |
-
-The installer requires `tar` and one of `curl`/`wget`, plus `sha256sum`, `shasum`
-or `openssl` to verify the download. If it cannot verify the archive against the
-published checksum, it refuses to install it.
-
-Prefer to read before you pipe to a shell? Inspect it first:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh | less
-```
-
-#### Option C — Homebrew (macOS and Linux)
-
-Requires [Homebrew](https://brew.sh). Installs the prebuilt binary for your platform.
-
-```bash
-brew tap andymarthin/pgtransfer
-brew install pgtransfer
-```
-
-Or in a single command:
-
-```bash
-brew install andymarthin/pgtransfer/pgtransfer
-```
-
-Upgrade later with:
-
-```bash
-brew update && brew upgrade pgtransfer
-```
-
-#### Option D — build from source
-
-Requires **Go 1.25 or higher**.
-
-```bash
-git clone https://github.com/andymarthin/pgtransfer.git
-cd pgtransfer
-go mod tidy
-go build -o pgtransfer .
-sudo mv pgtransfer /usr/local/bin/     # or: export PATH="$PATH:$PWD"
-```
-
-#### Option E — `go install`
-
-Requires **Go 1.25 or higher**. Installs into `$(go env GOPATH)/bin`, which must
-be on your `PATH`.
-
-```bash
-go install github.com/andymarthin/pgtransfer@latest
-```
-
-#### Verify
-
-```bash
-pgtransfer version          # e.g. "pgtransfer v1.1.0"
-pgtransfer --help
-```
-
-## 📋 Usage
-
-### Command Overview
-
-```bash
-# Profile Management
-pgtransfer profile add <name>           # Create new connection profile
-pgtransfer profile delete <name>        # Delete existing profile
-pgtransfer profile list                 # List all profiles
-
-# Connection Testing
-pgtransfer test-connection <profile>    # Test database connection
-
-# Data Export
-pgtransfer export csv <profile> --table <table> --output <file.csv>
-pgtransfer export dump <profile> --output <file.sql> [--format custom|directory|plain]
-
-# Data Import  
-pgtransfer import csv <profile> --table <table> --input <file.csv>
-pgtransfer import dump <profile> --input <file.sql>
-
-# Database Migration
-pgtransfer migrate <source> <target> [--mode schema|data|full] [--tables table1,table2]
-
-# Migration Rollback
-pgtransfer migrate rollback <profile> --backup-file <backup.sql>
-
-# AI Agent Integration (Model Context Protocol server over stdio)
-pgtransfer mcp
-```
-
-> **Tip:** every command above also accepts the global `--json` flag for
-> machine-readable output. See [AI & Automation](#-ai--automation).
-
-### Quick Examples
-
-```bash
-# 1. Set up a new profile with SSH tunnel
-pgtransfer profile add production
-# Follow interactive prompts for SSH and database configuration
-
-# 2. Export production data
-pgtransfer export csv production --table users --output users.csv --batch-size 10000
-
-# 3. Migrate to development environment
-pgtransfer migrate production development --mode schema
-
-# 4. Create full database backup
-pgtransfer export dump production --output backup_$(date +%Y%m%d).sql --format custom
-```
-
-### Profile Management
-
-PGTransfer uses connection profiles to manage database credentials and settings securely.
-
-#### Create a New Profile (Interactive)
-
-```bash
-pgtransfer profile add myprofile
-```
-
-The interactive setup guides you through comprehensive configuration:
-
-**1. SSH Tunnel Configuration** (optional but recommended for remote databases)
-```
-Enable SSH tunnel? [y/N]: y
-SSH Host: bastion.example.com
-SSH Port [22]: 22
-SSH Username: deploy
-SSH Authentication:
-  1. Password
-  2. SSH Key
-  3. SSH Agent
-Choose [1-3]: 2
-SSH Key Path: ~/.ssh/id_rsa
-Local Port [5433]: 5433
-```
-
-**2. Database Configuration**
-```
-Database Host: localhost          # Use localhost when using SSH tunnel
-Database Port [5432]: 5433       # Use tunnel local port
-Database Name: production_db
-Username: app_user
-Password: [hidden input]
-SSL Mode:
-  1. disable
-  2. require  
-  3. verify-ca
-  4. verify-full
-Choose [1-4]: 2
-```
-
-**3. Automatic Validation**
-- SSH tunnel connectivity test
-- Database connection verification
-- Configuration validation and storage
-
-#### Create a Profile (Command Line)
-
-```bash
-pgtransfer profile add production \
-  --user myuser \
-  --password mypassword \
-  --host db.example.com \
-  --port 5432 \
-  --database myapp \
-  --sslmode require
-```
-
-#### SSH Tunnel Configuration
-
-For secure connections through a bastion host:
-
-```bash
-pgtransfer profile add staging \
-  --user dbuser \
-  --host localhost \
-  --port 5432 \
-  --database staging_db \
-  --ssh-host bastion.example.com \
-  --ssh-user ubuntu \
-  --ssh-key ~/.ssh/id_rsa
-```
-
-#### List Profiles
-
-```bash
-pgtransfer profile list
-```
-
-#### Test Connection
-
-```bash
-pgtransfer test-connection myprofile
-```
-
-#### Update Existing Profile
-
-When updating an existing profile, PGTransfer will show current values as defaults:
-
-```bash
-pgtransfer profile add myprofile
-```
-
-```
-⚠️  Profile 'myprofile' already exists with the following configuration:
-  Database: myuser@db.example.com:5432/myapp
-  SSL Mode: require
-  SSH: Not configured
-
-Do you want to overwrite it? [y/N]: y
-
-🧩 Interactive Profile Setup
-Database user [myuser]: newuser
-Database password: 
-Database host [db.example.com]: 
-Database port [5432]: 
-Database name [myapp]: 
-SSL mode [require]: 
-Use SSH tunnel? (y/N) [n]: 
-```
-
-### Data Operations
-
-#### Export Data
-
-Export a table to CSV:
-
-```bash
-pgtransfer export csv myprofile public.users users_export.csv --headers
-```
-
-Export with schema flag (defaults to 'public' if not specified):
-
-```bash
-pgtransfer export csv myprofile users users_export.csv --headers --schema public
-```
-
-With custom batch size for large datasets:
-
-```bash
-pgtransfer export csv myprofile public.users large_export.csv --headers --batch-size 1000
-```
-
-#### Database Dump Export
-
-Export complete database to SQL dump:
-
-```bash
-pgtransfer export dump myprofile database_backup.sql
-```
-
-Export with custom format and compression:
-
-```bash
-pgtransfer export dump myprofile backup.dump --format custom --compress
-```
-
-Export schema only (no data):
-
-```bash
-pgtransfer export dump myprofile schema_backup.sql --schema-only
-```
-
-Export data only (no schema):
-
-```bash
-pgtransfer export dump myprofile data_backup.sql --data-only
-```
-
-Export specific tables:
-
-```bash
-pgtransfer export dump myprofile users_backup.sql --table users --table orders
-```
-
-Export with advanced options:
-
-```bash
-pgtransfer export dump myprofile full_backup.dump \
-  --format custom \
-  --compress \
-  --verbose \
-  --timeout 300
-```
-
-**Supported Formats:**
-- `plain` (default): Standard SQL text format
-- `custom`: PostgreSQL custom binary format (supports compression)
-- `directory`: Directory format for parallel processing
-- `tar`: TAR archive format
-
-#### Import Data
-
-Import CSV data to a table:
-
-```bash
-pgtransfer import csv myprofile public.users users_import.csv --headers
-```
-
-Import with schema flag (defaults to 'public' if not specified):
-
-```bash
-pgtransfer import csv myprofile users users_import.csv --headers --schema public
-```
-
-Import with custom batch size and overwrite existing data:
-
-```bash
-pgtransfer import csv myprofile public.users users_import.csv --headers --batch-size 1000 --overwrite
-```
-
-Import a header-less CSV (columns are mapped positionally using the target table definition):
-
-```bash
-pgtransfer import csv myprofile public.users users_no_header.csv
-```
-
-> **Headers behaviour:** when `--headers` is supplied the first CSV row is treated
-> as the column name list; when omitted, **every** row is treated as data and the
-> columns are matched positionally against the target table.
-
-Import from SQL dump file (automatically detects plain SQL vs. binary pg_dump formats):
-
-```bash
-pgtransfer import dump myprofile backup.sql
-```
-
-Import a custom-format dump and drop existing objects first:
-
-```bash
-pgtransfer import dump myprofile backup.dump --clean
-```
-
-Import with a timeout and strict error handling:
-
-```bash
-pgtransfer import dump myprofile backup.sql --timeout 300 --strict
-```
-
-> **Version-skew tolerance:** by default, restore tolerates benign errors caused by
-> client/server version differences (for example an `unrecognized configuration
-> parameter` emitted by a newer `pg_dump`). Pass `--strict` to abort on the first
-> error instead.
-
-### Database Migration
-
-PGTransfer provides comprehensive database migration capabilities for transferring entire databases or specific components between PostgreSQL instances. You can use either different profiles or the same profile with database overrides.
-
-#### Migration Modes
-
-**Mode 1: Different Profiles**
-Use separate connection profiles for source and target:
-
-```bash
-pgtransfer migrate database source_profile target_profile
-```
-
-**Mode 2: Same Profile with Database Override**
-Use the same connection profile but specify different database names:
-
-```bash
-pgtransfer migrate database profile --source-database source_db --target-database target_db
-```
-
-#### Full Database Migration
-
-Migrate complete database (schema + data) with different profiles:
-
-```bash
-pgtransfer migrate database source_profile target_profile
-```
-
-Migrate complete database using same profile:
-
-```bash
-pgtransfer migrate database myprofile --source-database prod_db --target-database staging_db
-```
-
-#### Schema-Only Migration
-
-Transfer only the database structure with different profiles:
-
-```bash
-pgtransfer migrate database source_profile target_profile --schema-only
-```
-
-Transfer only the database structure using same profile:
-
-```bash
-pgtransfer migrate database myprofile --source-database prod_db --target-database dev_db --schema-only
-```
-
-#### Data-Only Migration
-
-Transfer only data (assumes target schema exists) with different profiles:
-
-```bash
-pgtransfer migrate database source_profile target_profile --data-only
-```
-
-Transfer only data using same profile:
-
-```bash
-pgtransfer migrate database myprofile --source-database source_db --target-database target_db --data-only
-```
-
-#### Selective Table Migration
-
-Migrate specific tables with different profiles:
-
-```bash
-pgtransfer migrate database source_profile target_profile --tables users,orders,products
-```
-
-Migrate specific tables using same profile:
-
-```bash
-pgtransfer migrate database myprofile --source-database db1 --target-database db2 --tables users,orders,products
-```
-
-#### Migration with Validation
-
-Pre-validate migration before execution with different profiles:
-
-```bash
-pgtransfer migrate database source_profile target_profile --validate --verbose
-```
-
-Pre-validate migration using same profile:
-
-```bash
-pgtransfer migrate database myprofile --source-database source_db --target-database target_db --validate --verbose
-```
-
-#### Migration with Rollback Support
-
-Enable automatic backup for rollback capability with different profiles:
-
-```bash
-pgtransfer migrate database source_profile target_profile --enable-rollback
-```
-
-Enable automatic backup using same profile:
-
-```bash
-pgtransfer migrate database myprofile --source-database source_db --target-database target_db --enable-rollback
-```
-
-#### Advanced Migration Options
-
-With different profiles:
-
-```bash
-pgtransfer migrate database source_profile target_profile \
-  --tables users,orders \
-  --validate \
-  --enable-rollback \
-  --timeout 1800 \
-  --batch-size 1000 \
-  --verbose
-```
-
-With same profile and database override:
-
-```bash
-pgtransfer migrate database myprofile \
-  --source-database source_db \
-  --target-database target_db \
-  --tables users,orders \
-  --validate \
-  --enable-rollback \
-  --timeout 1800 \
-  --batch-size 1000 \
-  --verbose
-```
-
-#### Rollback Operations
-
-Rollback a migration using a backup file:
-
-```bash
-pgtransfer migrate rollback target_profile /path/to/backup.sql --verbose
-```
-
-#### Migration Features
-
-- **🔍 Pre-Migration Validation**: Connection testing and schema compatibility checks
-- **📊 Progress Tracking**: Real-time progress indicators with elapsed time
-- **🔄 Rollback Support**: Automatic backup creation for safe rollbacks
-- **⚙️ Flexible Options**: Schema-only, data-only, or selective table migration
-- **🛡️ Error Handling**: Comprehensive error reporting and graceful failure handling
-- **⏱️ Timeout Control**: Configurable timeouts for long-running migrations
-- **📝 Verbose Logging**: Detailed operation logs for troubleshooting
-
-#### Migration Examples
-
-**Production Database Refresh (Different Profiles):**
-```bash
-# Create backup and migrate with rollback support
-pgtransfer migrate database production staging --enable-rollback --verbose
-
-# If issues occur, rollback
-pgtransfer migrate rollback staging /path/to/backup_20241028_092222.sql
-```
-
-**Production Database Refresh (Same Profile):**
-```bash
-# Create backup and migrate with rollback support using same profile
-pgtransfer migrate database myprofile \
-  --source-database prod_db \
-  --target-database staging_db \
-  --enable-rollback --verbose
-
-# If issues occur, rollback
-pgtransfer migrate rollback staging /path/to/backup_20241028_092222.sql
-```
-
-**Development Environment Setup (Different Profiles):**
-```bash
-# Schema-only migration for development
-pgtransfer migrate database production dev --schema-only
-
-# Add sample data separately
-pgtransfer migrate database sample_data dev --data-only --tables users,products
-```
-
-**Development Environment Setup (Same Profile):**
-```bash
-# Schema-only migration for development using same profile
-pgtransfer migrate database myprofile \
-  --source-database production_db \
-  --target-database dev_db \
-  --schema-only
-
-# Add sample data separately
-pgtransfer migrate database myprofile \
-  --source-database sample_data_db \
-  --target-database dev_db \
-  --data-only --tables users,products
-```
-
-**Selective Data Migration (Different Profiles):**
-```bash
-# Migrate specific tables with validation
-pgtransfer migrate database prod_replica analytics \
-  --tables user_events,transactions,metrics \
-  --validate \
-  --timeout 3600
-```
-
-**Selective Data Migration (Same Profile):**
-```bash
-# Migrate specific tables with validation using same profile
-pgtransfer migrate database myprofile \
-  --source-database prod_replica_db \
-  --target-database analytics_db \
-  --tables user_events,transactions,metrics \
-  --validate \
-  --timeout 3600
-```
-
-## ⚡ Performance & Optimization
-
-PGTransfer is designed for efficient data operations with intelligent batch processing, streaming architecture, and automatic resource management.
-
-### Performance Features
-
-- **🔄 Streaming Processing**: Handles datasets larger than available memory
-- **🎯 Key-Based Pagination**: Exports page through the table by primary key, so results are complete and ordering is deterministic
-- **⚡ Connection Pooling**: Reuses database connections efficiently
-- **📊 Real-time Metrics**: Provides live performance monitoring with time estimates
-- **💾 Memory Efficiency**: Maintains minimal memory usage regardless of dataset size
-
-### Batch Size Optimization
-
-**Default batch size: 20,000 rows.** Each batch is one query against the
-database, so larger batches mean fewer round trips and less per-query overhead.
-The default suits most environments; lower it if you are tight on memory or on a
-high-latency connection where huge batches time out.
-
-#### Measured Export Performance (5,000,000 rows, 8 columns)
-
-Same machine, same table, PostgreSQL 15.
+Measured on a 5,000,000 row, 8-column table on an M1 Pro with PostgreSQL 15:
 
 | Batch size | Time | Throughput |
-|------------|------|------------|
+| --- | --- | --- |
 | 500 | 15.3 s | ~327,000 rows/s |
 | 20,000 (default) | **9.8 s** | ~510,000 rows/s |
+| 50,000 | 5.5 s | ~909,000 rows/s |
 
-For reference, server-side `COPY TO STDOUT` (the floor for any client that has
-to parse and re-emit the data) takes **5.3 s**, or ~949,000 rows/s.
+Memory stays flat at about 20–25 MB regardless of table size, because batches are
+streamed to disk rather than buffered. For reference, server-side
+`COPY ... TO STDOUT` on the same table takes 5.3 s — the practical floor for a
+client that has to receive, format and write every value.
 
-Memory stays flat at roughly 20-25 MB regardless of table size, because batches
-are streamed to disk rather than buffered.
+Practical notes:
 
-Export scales linearly with row count at the default settings:
+- **Raise `--batch-size` on a fast local network.** 50,000 is usually faster than
+  the default. Lower it on a high-latency link where a big batch risks a timeout.
+- **Import is slower than export.** Each row is a parameterised `INSERT`, batched
+  per transaction. Raise `--batch-size` for bulk loads into an empty table.
+- **`export dump` is the fastest way to move everything.** It uses `pg_dump` and
+  `COPY`, and restores in parallel with `--format directory`.
+- **CSV export is for interchange, not backup.** It carries data only — no indexes,
+  constraints, sequences or ownership. Use `export dump` for a real backup.
 
-| Rows | Time |
-|------|------|
-| 1,000,000 | 3.6 s |
-| 5,000,000 | 9.8 s |
-| 10,000,000 | 17.0 s |
+Full numbers, including per-type formatting costs, are in
+[BENCHMARKS.md](BENCHMARKS.md).
 
-### Production Examples
+---
 
-#### Large Table Export
+## Configuration
 
-```bash
-# Standard high-performance export
-pgtransfer export csv production --table transactions \
-  --output transactions.csv \
-  --batch-size 10000 \
-  --progress
-
-# Memory-optimized export for constrained environments  
-pgtransfer export csv production --table events \
-  --output events.csv \
-  --batch-size 2500 \
-  --progress
-
-# Maximum throughput for dedicated servers
-pgtransfer export csv production --table logs \
-  --output logs.csv \
-  --batch-size 25000 \
-  --progress
-```
-
-#### Large Dataset Import
-
-```bash
-# Optimized import with progress tracking
-pgtransfer import csv staging --table transactions \
-  --input transactions.csv \
-  --batch-size 5000 \
-  --progress
-
-# Safe import with validation
-pgtransfer import csv production --table users \
-  --input users.csv \
-  --batch-size 1000 \
-  --validate \
-  --progress
-
-# High-speed import for development
-pgtransfer import csv dev --table test_data \
-  --input large_dataset.csv \
-  --batch-size 15000 \
-  --skip-validation \
-  --progress
-```
-
-#### Database Migration Performance
-
-```bash
-# Schema-only migration (fast)
-pgtransfer migrate production staging --mode schema
-
-# Data migration with optimization
-pgtransfer migrate production staging \
-  --mode data \
-  --batch-size 10000 \
-  --progress
-
-# Selective table migration
-pgtransfer migrate production staging \
-  --tables users,orders,products \
-  --batch-size 5000 \
-  --progress
-```
-
-### Real-time Progress Tracking
-
-All operations provide comprehensive progress monitoring:
-
-- **📊 Visual Progress Bar**: Real-time completion percentage
-- **⚡ Performance Metrics**: Throughput (records/second)
-- **⏱️ Time Tracking**: Elapsed time and ETA calculations  
-- **💾 Resource Monitoring**: Memory usage and batch efficiency
-- **🔍 Operation Details**: Current batch, total records, and status
-
-#### Example Output
-
-**CSV Export Progress:**
-```
-Exporting table 'transactions'...
-Progress: 75% |███████████████     | 750,000/1,000,000 records
-Speed: 8,500 rec/sec | Elapsed: 1m 28s | ETA: 29s
-Batch: 750 (size: 10,000) | Memory: 145MB
-```
-
-**Migration Progress:**
-```
-Migrating database: production → staging
-Schema migration: ✅ Complete (2.3s)
-Data migration: 45% |█████████       | 4.5M/10M records  
-Speed: 12,300 rec/sec | Elapsed: 6m 12s | ETA: 7m 30s
-Current table: orders (batch 450/892)
-```
-
-**SSH Tunnel Status:**
-```
-🔐 SSH Tunnel: bastion.company.com:22 → localhost:5433
-Status: ✅ Connected | Uptime: 5m 23s
-Database: ✅ Connected via tunnel
-```
-
-### Memory Management
-
-PGTransfer implements intelligent memory management:
-- **Streaming Processing**: Data is processed in chunks, not loaded entirely into memory
-- **Connection Pooling**: Efficient database connection reuse
-- **Garbage Collection**: Automatic cleanup of processed batches
-- **Resource Monitoring**: Built-in memory usage tracking
-
-## 📊 CSV Data Type Handling
-
-PGTransfer provides intelligent CSV formatting that properly handles PostgreSQL data types for seamless import/export operations.
-
-### Supported Data Types
-
-| PostgreSQL Type | CSV Format | Example |
-|----------------|------------|---------|
-| `DATE` | `YYYY-MM-DD` | `2008-07-06` |
-| `TIMESTAMP` | `YYYY-MM-DD HH:MM:SS` | `2025-10-28 01:59:38` |
-| `NUMERIC(p,s)` | Decimal notation | `63942.00` |
-| `INTEGER` | Plain number | `457719` |
-| `VARCHAR/TEXT` | Quoted strings | `user_0457719` |
-| `BOOLEAN` | `true`/`false` | `true` |
-| `BYTEA` | String representation | Converted to readable format |
-
-### Key Improvements
-
-#### ✅ Date and Timestamp Formatting
-- **Before**: `1960-01-02 00:00:00 +0000 +0000` (with timezone info)
-- **After**: `1960-01-02` (clean date format)
-- **Timestamp**: `2025-10-28 01:59:38` (without timezone)
-
-#### ✅ Decimal and Numeric Handling
-- **Before**: `[49 51 57 52 50 46 48 48]` (byte array representation)
-- **After**: `63942.00` (proper decimal format)
-
-#### ✅ Null Value Handling
-- **Consistent**: Empty strings for NULL values across all data types
-- **Import Compatible**: Properly recognized during CSV import operations
-
-### CSV Export Examples
-
-#### Standard Table Export
-```bash
-# Export with proper formatting
-pgtransfer export csv myprofile public.users users.csv --headers
-```
-
-#### Custom Query Export
-```bash
-# Export specific columns with formatting
-pgtransfer export csv myprofile results.csv \
-  --query "SELECT id, name, date_of_birth, salary FROM users WHERE active = true" \
-  --headers
-```
-
-### CSV Import Compatibility
-
-The improved formatting ensures seamless round-trip operations:
-
-```bash
-# Export data
-pgtransfer export csv source_profile public.users exported_data.csv --headers
-
-# Import to different database
-pgtransfer import csv target_profile public.users_copy exported_data.csv --headers
-```
-
-**Result**: All data types are preserved correctly without manual formatting adjustments.
-
-### Advanced Usage
-
-#### Override Profile Database
-
-```bash
-pgtransfer export --profile myprofile --database different_db --table users --file export.csv
-```
-
-#### Skip Connection Testing
-
-```bash
-pgtransfer profile add myprofile --skip-test
-```
-
-#### Force Profile Overwrite
-
-```bash
-pgtransfer profile add myprofile --force
-```
-
-## 🔧 Configuration
-
-### Configuration File
-
-Profiles are stored in `~/.pgtransfer/config.yaml`:
+Profiles live in `~/.pgtransfer/config.yaml`:
 
 ```yaml
 profiles:
@@ -1108,7 +601,7 @@ profiles:
     sslmode: disable
     ssh:
       enabled: false
-  
+
   production:
     name: production
     user: app_user
@@ -1125,155 +618,115 @@ profiles:
       timeout: 10
 ```
 
+The file is created with mode `0600`. Prefer `profile add` over editing it by hand —
+that way the password is entered without being echoed and the connection is tested.
+
 ### Logging
 
-Logs are automatically saved to `~/.pgtransfer/logs/` in JSON format:
+`migrate database` appends an entry to `~/.pgtransfer/logs/` as JSON, one file per
+day:
 
 ```json
 {
   "timestamp": "2024-01-15T10:30:45Z",
-  "level": "info",
-  "operation": "export",
+  "command": "migrate database",
   "profile": "production",
-  "table": "users",
-  "file": "users_export.csv",
   "status": "success",
-  "duration_ms": 1250,
-  "rows_processed": 10000
+  "message": "Successfully migrated to staging",
+  "duration": "1.25s"
 }
 ```
 
-## 🛠️ Development & Testing
+Passwords are never written to the log.
 
-### Development Setup
+---
+
+## Security notes
+
+- **Credentials** are stored in `~/.pgtransfer/config.yaml` with mode `0600`, and
+  never echoed to the terminal, written to logs, or included in `--json` or MCP
+  output.
+- **SSH host keys** are not currently verified — connections accept any host key, to
+  keep first-time setup simple. If you rely on a tunnel to protect production
+  credentials, verify the bastion's host key out of band first, or use a network
+  path you already trust.
+- **`--password` on the command line** is visible to other local users in `ps`.
+  Prefer the interactive prompt for profiles you will keep.
+- **`--query` runs arbitrary SQL.** It is your SQL and it runs as your user, so it
+  carries whatever privileges that user has. The same applies to the MCP
+  `export_csv` tool.
+- **Backups from `--enable-rollback`** are full copies of the target database and
+  contain real data. They are stored under `~/.pgtransfer/backups/`; delete them
+  once a migration is confirmed good.
+
+---
+
+## Development
 
 ```bash
-# Clone and setup
 git clone https://github.com/andymarthin/pgtransfer.git
 cd pgtransfer
-
-# Install dependencies
-go mod tidy
-
-# Build for development
+go mod download
 go build -o pgtransfer .
-
-# Fast unit tests (no database required)
-go test ./...
-
-# Run linting
-go vet ./...
-staticcheck ./...
 ```
 
-### Test Suite
+```bash
+make test        # unit tests, no database needed
+make lint        # gofmt + go vet
+make bench       # benchmarks
+```
 
-The project has two layers of tests:
+### Tests
 
-| Layer | Command | Requires | Scope |
-|-------|---------|----------|-------|
-| **Unit** | `go test ./...` | nothing | Pure logic: DSN building, config lifecycle, dump-format detection, CSV value formatting, SSH auth selection, duration formatting |
-| **Integration** | `go test -tags=integration ./internal/io/...` | a live PostgreSQL + SSH server | Real round-trips: `pg_dump`/`pg_restore`, CSV export/import, and the SSH tunnel path |
-
-Unit tests run in CI on every push and pull request. Integration tests run in a
-separate CI job that provisions PostgreSQL and the repository SSH image.
-
-#### Running the integration tests
-
-Integration tests are guarded by the `integration` build tag and read their
-settings from environment variables. They **skip** when the prerequisites are
-absent — so day-to-day `go test ./...` never needs a database:
+Unit tests need no database:
 
 ```bash
-# 1. Start the local test stack
-cd scripts && docker compose up -d && cd ..
+go test ./...
+```
 
-# 2. Run the integration tests against it
-PGTRANSFER_TEST_DSN='postgres://testuser:testpass@localhost:5433/testdb?sslmode=disable' \
-PGTRANSFER_TEST_SSH_HOST=localhost PGTRANSFER_TEST_SSH_PORT=2222 \
-PGTRANSFER_TEST_SSH_USER=sshuser  PGTRANSFER_TEST_SSH_PASSWORD=sshpass \
-PGTRANSFER_TEST_DB_HOST=postgres \
-  go test -tags=integration -v ./internal/io/...
+Integration tests need a live PostgreSQL and an SSH server, and are driven by
+`scripts/docker-compose.yml`:
+
+```bash
+cd scripts && docker compose up -d
+cd ..
+export PGTRANSFER_TEST_DSN='postgres://testuser:testpass@localhost:5433/testdb?sslmode=disable'
+export PGTRANSFER_TEST_REQUIRE=1
+go test ./internal/io/
 ```
 
 | Variable | Default | Purpose |
-|----------|---------|---------|
-| `PGTRANSFER_TEST_DSN` | *(unset)* | DSN of the test database; **required** for the direct tests |
-| `PGTRANSFER_TEST_REQUIRE` | *(unset)* | When `1`, missing prerequisites **fail** instead of skipping (set by CI so a broken pipeline can't pass green) |
-| `PGTRANSFER_TEST_SSH_HOST` | `localhost` | SSH server host for the tunnel test |
+| --- | --- | --- |
+| `PGTRANSFER_TEST_DSN` | — | Database DSN; tests skip when unset |
+| `PGTRANSFER_TEST_REQUIRE` | *(unset)* | Set to `1` to fail instead of skipping |
+| `PGTRANSFER_TEST_SSH_HOST` | *(unset)* | SSH server for tunnel tests |
 | `PGTRANSFER_TEST_SSH_PORT` | `2222` | SSH server port |
-| `PGTRANSFER_TEST_SSH_USER` | *(unset)* | SSH user; when unset the tunnel test skips |
+| `PGTRANSFER_TEST_SSH_USER` | *(unset)* | SSH user |
 | `PGTRANSFER_TEST_SSH_PASSWORD` | *(unset)* | SSH password |
-| `PGTRANSFER_TEST_DB_HOST` | `postgres` | Database host **as seen from the SSH server** |
-| `PGTRANSFER_TEST_DB_PORT` | `5432` | Database port as seen from the SSH server |
+| `PGTRANSFER_TEST_DB_HOST` | `postgres` | Database host **as the SSH server sees it** |
+| `PGTRANSFER_TEST_DB_PORT` | `5432` | Database port as the SSH server sees it |
 | `PGTRANSFER_TEST_DB_USER` | `testuser` | Database user |
 | `PGTRANSFER_TEST_DB_PASSWORD` | `testpass` | Database password |
 | `PGTRANSFER_TEST_DB_NAME` | `testdb` | Database name |
 
-> **Note:** `PGTRANSFER_TEST_DB_HOST` is resolved from the *SSH server's* point of
-> view, not the test host. With the Docker stack that is the compose service name
-> `postgres`; in CI the SSH container reaches the host-published database via
-> `host.docker.internal`.
-
-### Local Testing with Docker
-
-The repository ships a complete local testing stack under [`scripts/`](scripts/)
-(PostgreSQL with seeded schemas + sample data, an SSH server for tunnel testing,
-and sample CSV fixtures).
-
-**Start the full stack:**
+The compose stack publishes PostgreSQL on `localhost:5433` and the SSH server on
+`localhost:2222`:
 
 ```bash
 cd scripts
 docker compose up -d
-docker compose ps
-```
-
-This brings up:
-
-| Service | Host endpoint | Credentials |
-|---------|---------------|-------------|
-| PostgreSQL | `localhost:5433` (host) → `5432` (container) | `testuser` / `testpass`, db `testdb` |
-| SSH server (tunnels) | `localhost:2222` | `sshuser` / `sshpass` |
-
-> **Note:** the database is published on host port **5433** to avoid clashing with
-> a locally installed PostgreSQL. Inside the Docker network the database is
-> reachable at the service name `postgres:5432`.
-
-**Create a test profile and verify:**
-
-```bash
+cd ..
 ./pgtransfer profile add test-docker \
   --host localhost --port 5433 \
   --user testuser --password testpass \
   --database testdb
-./pgtransfer test-connection --profile test-docker
+./pgtransfer test-connection test-docker
 ```
 
-**Test an SSH tunnel** (Postgres is reached via the SSH server's view of the
-network, so the database host is the compose service name `postgres`):
+Tear down with `docker compose down`, or `docker compose down -v` to remove the data
+volume too.
 
-```bash
-./pgtransfer profile add ssh-test \
-  --host postgres --port 5432 \
-  --user testuser --password testpass \
-  --database testdb \
-  --ssh-host localhost --ssh-user sshuser --ssh-password sshpass --ssh-port 2222
-./pgtransfer test-connection --profile ssh-test
-```
-
-**Tear down:**
-
-```bash
-cd scripts
-docker compose down          # keep data
-docker compose down -v       # remove volumes too
-```
-
-**Test against other PostgreSQL versions:**
-
-The stack uses PostgreSQL 15 by default. To check a different major version,
-run it standalone on its own port:
+To check a different PostgreSQL major version, run it standalone on its own port:
 
 ```bash
 docker run -d --name pgt-pg17 \
@@ -1282,143 +735,38 @@ docker run -d --name pgt-pg17 \
 
 ./pgtransfer profile add pg17 \
   --host localhost --port 5417 \
-  --user testuser --password testpass \
-  --database testdb
+  --user testuser --password testpass --database testdb
 ```
 
-Swap `17` for `16` or `18` (and the port accordingly) to test those releases.
-
-### Code Quality
-
-```bash
-# Format code
-go fmt ./...
-
-# Clean up imports
-goimports -w .
-
-# Run static analysis
-staticcheck ./...
-
-# Clean dependencies
-go mod tidy
-
-# Build and test
-go build -o pgtransfer . && go test ./...
-```
+Export and import are tested against PostgreSQL 15, 16, 17 and 18. Client tools
+(`pg_dump`, `pg_restore`, `psql`) should match or exceed the server's major version.
 
 ### Benchmarks
 
-The CPU-bound parts of the pipeline are benchmarked so that performance work can
-be measured rather than guessed. A `Makefile` wraps the commands:
-
-| Command | What it does |
-|---------|--------------|
-| `make bench` | Runs every benchmark with `-benchmem` |
-| `make bench-csv` | Runs only the CSV export/import benchmarks |
-| `make bench-save` | Records a baseline in `.bench/baseline.txt` |
-| `make bench-compare` | Re-runs and diffs against the baseline with `benchstat` |
-| `make bench-clean` | Removes recorded benchmark data |
-
 ```bash
-# Run everything
-make bench
-
-# Record a baseline, change some code, then compare
-make bench-save
-# ...make a change...
-make bench-compare
+make bench            # run
+make bench-save       # record a baseline
+make bench-compare    # compare against it
 ```
 
-The suite lives next to the code it measures:
-
-| File | Covers |
-|------|--------|
-| `internal/io/csv_bench_test.go` | `FormatCSVValue` per type, an 8-column row, CSV encoding cost, the full format-and-write pipeline, and column-list parsing |
-| `internal/output/output_bench_test.go` | JSON success and error envelopes, the at-most-once guard, `IsJSON`, and text-mode error output |
-| `internal/config/config_bench_test.go` | `BuildDSN` (plain, escaped, and URL forms), config loading for 1/10/50 profiles, and profile existence checks |
-| `internal/mcpserver/server_bench_test.go` | Schema qualification, CSV argument splitting, JSON argument decoding, and tool result construction |
-
-Benchmarks never touch a database: the query layer is I/O bound and is covered
-by the integration tests, while these benchmarks isolate the CPU cost that a
-change to formatting or encoding would actually affect.
-
-Run them locally and compare against a recorded baseline with `make bench-save`
-and `make bench-compare`.
-
-## 🔒 Security Features
-
-### Authentication & Encryption
-- **🔐 SSH Tunnel Encryption**: End-to-end encryption for all database connections
-- **🛡️ SSL/TLS Support**: Configurable SSL modes (disable, require, verify-ca, verify-full)
-- **🔑 Multiple Auth Methods**: SSH keys, SSH agent, and password authentication
-- **👤 Secure Input**: Passwords never echoed to terminal or logged
-
-### Data Protection
-- **📁 Secure Storage**: Encrypted local storage of connection profiles
-- **🚫 No Credential Logging**: Sensitive data excluded from all log files
-- **🔄 Connection Validation**: Automatic certificate and host key verification
-- **⏱️ Session Management**: Automatic timeout and cleanup of connections
-
-### Advanced Security
-- **🏢 Bastion Host Support**: Secure access through jump servers and bastion hosts
-- **🔍 Connection Auditing**: Detailed logging of connection attempts and operations
-- **🛡️ Network Isolation**: Database access only through encrypted tunnels
-- **📋 Security Standards**: Supports common enterprise security requirements
-
-### Known Limitations
-
-- **SSH host key verification**: SSH connections currently accept any host key
-  (`InsecureIgnoreHostKey`) to keep the initial setup friction low. For hardened
-  environments, pin the expected host key or use `known_hosts` verification
-  before relying on tunnels for production credentials.
-- **Restore error tolerance**: `import dump` tolerates benign client/server
-  version-skew errors by default. Use `--strict` when you need a restore to fail
-  on the first error.
-- **`--overwrite` semantics**: for database migration, overwrite relies on
-  `pg_restore --clean --if-exists` for binary dumps; plain SQL dumps rely on the
-  DROP statements emitted by `pg_dump`.
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
-
-### Development Setup
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Make your changes and add tests
-4. Commit your changes: `git commit -m 'Add amazing feature'`
-5. Push to the branch: `git push origin feature/amazing-feature`
-6. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- **Issues**: [GitHub Issues](https://github.com/andymarthin/pgtransfer/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/andymarthin/pgtransfer/discussions)
-- **Documentation**: [Wiki](https://github.com/andymarthin/pgtransfer/wiki)
-
-## 🏆 Acknowledgments
-
-### Core Technologies
-- **[Go](https://golang.org/)**: High-performance systems programming language
-- **[PostgreSQL](https://postgresql.org/)**: Advanced open-source relational database
-- **[Cobra](https://github.com/spf13/cobra)**: Powerful CLI framework for Go
-
-### Key Dependencies
-- **[pq](https://github.com/lib/pq)**: Pure Go PostgreSQL driver
-- **[golang.org/x/crypto/ssh](https://pkg.go.dev/golang.org/x/crypto/ssh)**: SSH client implementation
-- **[golang.org/x/term](https://pkg.go.dev/golang.org/x/term)**: Terminal utilities for secure input
-- **[gopkg.in/yaml.v3](https://gopkg.in/yaml.v3)**: YAML configuration parsing
-
-### Development Tools
-- **[staticcheck](https://staticcheck.io/)**: Advanced Go static analysis
-- **[goimports](https://pkg.go.dev/golang.org/x/tools/cmd/goimports)**: Import formatting and optimization
+They exercise formatting and encoding only, and never touch a database — the query
+layer is I/O bound and covered by the integration tests instead.
 
 ---
 
-**Made with ❤️ for the PostgreSQL community**
+## Contributing
+
+Issues and pull requests are welcome. Fork the repository, create a branch, add
+tests for your change, and open a PR. `make lint && make test` should pass.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## Acknowledgments
+
+Built with [Go](https://golang.org/), [PostgreSQL](https://postgresql.org/),
+[Cobra](https://github.com/spf13/cobra), [lib/pq](https://github.com/lib/pq),
+[golang.org/x/crypto/ssh](https://pkg.go.dev/golang.org/x/crypto/ssh) and
+[gopkg.in/yaml.v3](https://gopkg.in/yaml.v3), plus the
+[Model Context Protocol](https://modelcontextprotocol.io) Go SDK.

@@ -54,8 +54,8 @@ Batch processing helps with memory efficiency and performance when dealing with 
   # Export with headers
   pgtransfer export csv myprofile users users.csv --headers
 
-  # Export with custom batch size (default: 500)
-  pgtransfer export csv myprofile products products.csv --batch-size 1000
+  # Export with custom batch size (default: 20000)
+  pgtransfer export csv myprofile products products.csv --batch-size 50000
 
   # Export with overwrite
   pgtransfer export csv myprofile products products.csv --overwrite`,
