@@ -261,7 +261,72 @@ curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/$V/SHA2
 shasum -a 256 -c SHA256SUMS --ignore-missing   # Linux: sha256sum -c ...
 ```
 
-#### Option B — build from source
+#### Option B — install script (Linux, macOS)
+
+A self-contained shell installer downloads the right binary, verifies it against
+the release's `SHA256SUMS`, and installs it.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh | sh
+```
+
+It installs to `/usr/local/bin` when writable, otherwise to `~/.local/bin` (and
+tells you how to add that to your `PATH` if needed).
+
+Control the install with environment variables:
+
+```bash
+# pin a version
+curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh \
+  | PGTRANSFER_VERSION=v1.1.0 sh
+
+# choose the install directory (no sudo needed)
+curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh \
+  | PGTRANSFER_INSTALL="$HOME/bin" sh
+
+# never prompt for sudo (fail instead)
+curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh \
+  | PGTRANSFER_NO_SUDO=1 sh
+```
+
+| Variable | Purpose |
+| --- | --- |
+| `PGTRANSFER_VERSION` | Release tag to install, e.g. `v1.1.0` (default: latest) |
+| `PGTRANSFER_INSTALL` | Install directory (default: `/usr/local/bin`, else `~/.local/bin`) |
+| `PGTRANSFER_NO_SUDO` | Set to `1` to never use `sudo` |
+
+The installer requires `tar` and one of `curl`/`wget`, plus `sha256sum`, `shasum`
+or `openssl` to verify the download. If it cannot verify the archive against the
+published checksum, it refuses to install it.
+
+Prefer to read before you pipe to a shell? Inspect it first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andymarthin/pgtransfer/main/scripts/install.sh | less
+```
+
+#### Option C — Homebrew (macOS and Linux)
+
+Requires [Homebrew](https://brew.sh). Installs the prebuilt binary for your platform.
+
+```bash
+brew tap andymarthin/pgtransfer
+brew install pgtransfer
+```
+
+Or in a single command:
+
+```bash
+brew install andymarthin/pgtransfer/pgtransfer
+```
+
+Upgrade later with:
+
+```bash
+brew update && brew upgrade pgtransfer
+```
+
+#### Option D — build from source
 
 Requires **Go 1.25 or higher**.
 
@@ -273,7 +338,7 @@ go build -o pgtransfer .
 sudo mv pgtransfer /usr/local/bin/     # or: export PATH="$PATH:$PWD"
 ```
 
-#### Option C — `go install`
+#### Option E — `go install`
 
 Requires **Go 1.25 or higher**. Installs into `$(go env GOPATH)/bin`, which must
 be on your `PATH`.

@@ -66,6 +66,32 @@ Each release includes the following files:
 - `pgtransfer-v1.0.0-linux-arm64.tar.gz` - Linux ARM64
 - `pgtransfer-v1.0.0-darwin-amd64.tar.gz` - macOS Intel
 - `pgtransfer-v1.0.0-darwin-arm64.tar.gz` - macOS Apple Silicon
+- `SHA256SUMS` - checksums for every archive above
+- `install.sh` - the installer script (see `scripts/install.sh`)
+
+### Homebrew tap integration
+
+The release is published immediately (`draft: false`), so its artifacts are
+publicly downloadable as soon as the workflow finishes.
+
+After publishing, the workflow sends a `repository_dispatch` event named
+`pgtransfer-release` to
+[andymarthin/homebrew-pgtransfer](https://github.com/andymarthin/homebrew-pgtransfer),
+which rewrites its formula against the new `SHA256SUMS`.
+
+This step is best-effort:
+
+- It is **skipped** when the `HOMEBREW_TAP_TOKEN` secret is not configured.
+- It uses `continue-on-error`, so a tap problem never fails a release.
+- The tap also runs on a **daily schedule**, so a missed dispatch is picked up
+  within a day.
+
+To enable immediate updates, add a fine-grained personal access token scoped to
+the tap repository with **Contents: read and write**:
+
+```bash
+gh secret set HOMEBREW_TAP_TOKEN --repo andymarthin/pgtransfer
+```
 
 ### Version Information
 
