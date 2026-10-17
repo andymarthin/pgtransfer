@@ -117,16 +117,30 @@ func TestNormalizeDumpPath_DumpToSql(t *testing.T) {
 }
 
 func TestBuildPgRestoreArgs(t *testing.T) {
-	base := buildPgRestoreArgs("postgres://x", "/tmp/d.sql", false)
+	base := buildPgRestoreArgs("postgres://x", "/tmp/d.sql", false, false)
 	if contains(base, "--clean") {
 		t.Fatalf("did not expect --clean in non-clean args: %v", base)
 	}
-	clean := buildPgRestoreArgs("postgres://x", "/tmp/d.sql", true)
+	if contains(base, "--exit-on-error") {
+		t.Fatalf("did not expect --exit-on-error in tolerant args: %v", base)
+	}
+	clean := buildPgRestoreArgs("postgres://x", "/tmp/d.sql", true, false)
 	if !contains(clean, "--clean") || !contains(clean, "--if-exists") {
 		t.Fatalf("expected --clean --if-exists, got %v", clean)
 	}
 	if !contains(clean, "--no-owner") || !contains(clean, "--no-privileges") {
 		t.Fatalf("expected --no-owner --no-privileges, got %v", clean)
+	}
+
+	// Strict restores must ask pg_restore to stop at the first failure, because
+	// without it a failed object is reported on stderr and the exit status is 1
+	// either way.
+	strict := buildPgRestoreArgs("postgres://x", "/tmp/d.sql", false, true)
+	if !contains(strict, "--exit-on-error") {
+		t.Fatalf("expected --exit-on-error for a strict restore, got %v", strict)
+	}
+	if !contains(strict, "--dbname") {
+		t.Fatalf("expected --dbname, got %v", strict)
 	}
 }
 

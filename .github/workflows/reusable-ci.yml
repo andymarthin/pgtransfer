@@ -163,20 +163,25 @@ jobs:
           bash -n scripts/install.sh
 
       - name: Installer refuses a tampered archive
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Verify the installer's checksum gate: given an archive whose bytes
           # do not match the published SHA256SUMS, it must abort.
+          #
+          # Use the API with the workflow token: unauthenticated requests share
+          # a per-IP quota that GitHub's runners routinely exhaust, which made
+          # this step fail on rate limiting rather than on the gate.
           work=$(mktemp -d)
           cd "$work"
 
-          version=$(curl -fsSL https://api.github.com/repos/andymarthin/pgtransfer/releases/latest \
-            | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+          version=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
           asset="pgtransfer-${version}-linux-amd64.tar.gz"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${version}"
 
-          curl -fsSLO "https://github.com/andymarthin/pgtransfer/releases/download/${version}/${asset}"
+          curl -fsSL -o "${asset}" "${base}/${asset}"
           printf 'tampered' >> "${asset}"
-          curl -fsSL -o SHA256SUMS \
-            "https://github.com/andymarthin/pgtransfer/releases/download/${version}/SHA256SUMS"
+          curl -fsSL -o SHA256SUMS "${base}/SHA256SUMS"
 
           expected=$(awk -v a="$asset" '$2 == a {print $1}' SHA256SUMS)
           actual=$(sha256sum "${asset}" | awk '{print $1}')
@@ -197,8 +202,3 @@ jobs:
           "$RUNNER_TEMP/bin/pgtransfer" version
           "$RUNNER_TEMP/bin/pgtransfer" version | grep -q "pgtransfer v"
 
-      - name: Installer installs the latest release
-        run: |
-          PGTRANSFER_INSTALL="$RUNNER_TEMP/bin" PGTRANSFER_NO_SUDO=1 sh scripts/install.sh
-          "$RUNNER_TEMP/bin/pgtransfer" version
-          "$RUNNER_TEMP/bin/pgtransfer" version | grep -q "pgtransfer v"

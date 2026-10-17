@@ -59,43 +59,43 @@ func TestBuildInsertSQL(t *testing.T) {
 			name:    "plain columns",
 			table:   "users",
 			headers: []string{"id", "name"},
-			want:    `INSERT INTO users ("id","name") VALUES ($1,$2)`,
+			want:    `INSERT INTO "users" ("id","name") VALUES ($1,$2)`,
 		},
 		{
 			name:    "numeric header from a header-less file",
 			table:   "public.compat_rt",
 			headers: []string{"1", "customer_1", "user1@example.com"},
-			want:    `INSERT INTO public.compat_rt ("1","customer_1","user1@example.com") VALUES ($1,$2,$3)`,
+			want:    `INSERT INTO "public"."compat_rt" ("1","customer_1","user1@example.com") VALUES ($1,$2,$3)`,
 		},
 		{
 			name:    "reserved word column",
 			table:   "t",
 			headers: []string{"select", "from", "order"},
-			want:    `INSERT INTO t ("select","from","order") VALUES ($1,$2,$3)`,
+			want:    `INSERT INTO "t" ("select","from","order") VALUES ($1,$2,$3)`,
 		},
 		{
 			name:    "mixed case is preserved",
 			table:   "t",
 			headers: []string{"UserId", "CreatedAt"},
-			want:    `INSERT INTO t ("UserId","CreatedAt") VALUES ($1,$2)`,
+			want:    `INSERT INTO "t" ("UserId","CreatedAt") VALUES ($1,$2)`,
 		},
 		{
 			name:    "embedded quote is doubled",
 			table:   "t",
 			headers: []string{`we"ird`},
-			want:    `INSERT INTO t ("we""ird") VALUES ($1)`,
+			want:    `INSERT INTO "t" ("we""ird") VALUES ($1)`,
 		},
 		{
 			name:    "attempted injection cannot escape the identifier",
 			table:   "t",
 			headers: []string{`a" ) VALUES (1); DROP TABLE users; --`},
-			want:    `INSERT INTO t ("a"" ) VALUES (1); DROP TABLE users; --") VALUES ($1)`,
+			want:    `INSERT INTO "t" ("a"" ) VALUES (1); DROP TABLE users; --") VALUES ($1)`,
 		},
 		{
 			name:    "single column",
 			table:   "t",
 			headers: []string{"only"},
-			want:    `INSERT INTO t ("only") VALUES ($1)`,
+			want:    `INSERT INTO "t" ("only") VALUES ($1)`,
 		},
 	}
 
@@ -120,7 +120,7 @@ func TestBuildInsertSQLAlwaysQuotes(t *testing.T) {
 	sql := buildInsertSQL("t", headers)
 
 	columnList := strings.TrimSuffix(strings.SplitN(sql, ") VALUES (", 2)[0], ")")
-	columnList = strings.TrimPrefix(columnList, "INSERT INTO t (")
+	columnList = strings.TrimPrefix(columnList, `INSERT INTO "t" (`)
 
 	got := strings.Split(columnList, `","`)
 	for i := range got {

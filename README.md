@@ -241,6 +241,9 @@ pgtransfer export csv prod active.csv \
 The output file gets a `.csv` extension if you omit one. Export refuses to
 overwrite an existing file unless `--overwrite` is given.
 
+`--schema` supplies a schema for an unqualified table name. Names that need quoting
+(mixed case, spaces, reserved words) work whether or not you quote them yourself.
+
 `--query` runs your SQL as written, so it can be any `SELECT` — joins, aggregates,
 expressions. It is executed as a single statement.
 
@@ -271,6 +274,10 @@ every row is data and columns are matched positionally against the target table.
 **Empty fields** become SQL `NULL`, which is what `export csv` writes for a `NULL`.
 A genuinely empty string and a `NULL` are indistinguishable in CSV, so an empty
 field always round-trips as `NULL`.
+
+Table and column names are quoted for you. A quoted name such as `"public"."Order"`
+and a bare one such as `public.order` mean the same thing, so names that are case
+sensitive or contain spaces work either way.
 
 **Overwrite** truncates the table before the first batch. If the import then fails,
 the table is left empty — check the row count in the result before assuming success.
@@ -339,10 +346,12 @@ pgtransfer import dump staging backup.dump --verbose
 The format is detected from the file, so you do not have to say whether it is plain
 SQL or a `pg_dump` archive.
 
-Without `--strict`, restore tolerates errors caused by client and server version
-differences — an older `psql` meeting a newer dump, for example. The summary reports
-how many errors were ignored. Use `--strict` when a partially restored database is
-worse than no database.
+Without `--strict`, a restore is allowed to report problems that come from client and
+server version differences — an older `psql` meeting a newer dump, for example — and
+still counts as successful. The summary says how many messages were ignored. Anything
+that is not a known version-skew message (a failed `COPY`, a permission error, a missing
+table) fails the command and is reported, even without `--strict`. Use `--strict` when a
+partially restored database is worse than no database.
 
 ### Migrate between databases
 
@@ -401,6 +410,11 @@ A profile can reach its database through a bastion host. `pgtransfer` opens the
 tunnel for the duration of the command and closes it afterwards — nothing to
 supervise.
 
+The tunnel binds a free port on `127.0.0.1` and starts forwarding before the
+command runs, so a tunnel that cannot be set up fails immediately and names the
+reason (unreachable bastion, rejected credentials) rather than leaving `pg_dump`
+or `pg_restore` to time out against a port that was never listening.
+
 ```bash
 pgtransfer profile add prod \
   --host localhost \
@@ -432,7 +446,7 @@ pgtransfer test-connection prod
 
 The output includes the local port the tunnel is forwarding on, e.g.
 `localhost:5433`, so you can point `psql`, pgAdmin or DBeaver at the same database
-while a command is running.
+while that command runs.
 
 ---
 

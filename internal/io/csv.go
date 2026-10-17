@@ -172,7 +172,7 @@ func ExportCSV(db *sql.DB, table, exportPath string) error {
 		total = -1 // fallback if counting fails
 	}
 
-	query := fmt.Sprintf("SELECT * FROM %s", table)
+	query := fmt.Sprintf("SELECT * FROM %s", quoteTable(table))
 	rows, err := db.Query(query)
 	if err != nil {
 		return fmt.Errorf("failed to query table: %w", err)
@@ -268,7 +268,7 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 	defer writer.Flush()
 
 	// Get column information
-	query := fmt.Sprintf("SELECT * FROM %s LIMIT 1", table)
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT 1", quoteTable(table))
 	rows, err := db.Query(query)
 	if err != nil {
 		return fmt.Errorf("failed to query table for columns: %w", err)
@@ -318,16 +318,16 @@ func ExportCSVWithOptions(db *sql.DB, table, exportPath string, options *CSVOpti
 		if cursorCol >= 0 && lastKey != nil {
 			batchQuery = fmt.Sprintf(
 				"SELECT * FROM %s WHERE %s > $1 ORDER BY %s LIMIT %d",
-				table, quoteIdent(cols[cursorCol]), quoteIdent(cols[cursorCol]), options.BatchSize,
+				quoteTable(table), quoteIdent(cols[cursorCol]), quoteIdent(cols[cursorCol]), options.BatchSize,
 			)
 			batchArgs = []interface{}{lastKey}
 		} else if cursorCol >= 0 {
 			batchQuery = fmt.Sprintf(
 				"SELECT * FROM %s ORDER BY %s LIMIT %d",
-				table, quoteIdent(cols[cursorCol]), options.BatchSize,
+				quoteTable(table), quoteIdent(cols[cursorCol]), options.BatchSize,
 			)
 		} else {
-			batchQuery = fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d", table, options.BatchSize, offset)
+			batchQuery = fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d", quoteTable(table), options.BatchSize, offset)
 		}
 
 		batchRows, err := db.Query(batchQuery, batchArgs...)
@@ -590,7 +590,7 @@ func buildInsertSQL(table string, headers []string) string {
 	}
 	return fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s)",
-		table,
+		quoteTable(table),
 		strings.Join(quoted, ","),
 		strings.Join(placeholders, ","),
 	)
@@ -599,7 +599,7 @@ func buildInsertSQL(table string, headers []string) string {
 // tableColumns returns the ordered column names for the given table by asking
 // PostgreSQL for the column list. Used when importing header-less CSV files.
 func tableColumns(db *sql.DB, table string) ([]string, error) {
-	query := fmt.Sprintf("SELECT * FROM %s LIMIT 0", table)
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT 0", quoteTable(table))
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine columns for '%s': %w", table, err)
@@ -621,17 +621,7 @@ func tableColumns(db *sql.DB, table string) ([]string, error) {
 // Pagination needs a total order over the rows. A unique key provides exactly
 // that, which is why any other column is rejected even if it is indexed.
 func cursorColumn(db *sql.DB, table string, cols []string) int {
-	// The table name may be schema-qualified ("public.customers"); split it so
-	// the system catalogue lookups are unambiguous.
-	schema, name := "", table
-	if i := strings.LastIndex(table, "."); i >= 0 {
-		schema, name = table[:i], table[i+1:]
-	}
-	schema = strings.Trim(schema, `"`)
-	name = strings.Trim(name, `"`)
-	if schema == "" {
-		schema = "public"
-	}
+	schema, name := splitTableName(table)
 
 	const q = `
 		SELECT a.attname
@@ -661,11 +651,96 @@ func cursorColumn(db *sql.DB, table string, cols []string) int {
 	return -1
 }
 
+// splitTableName separates a qualified table name into schema and name,
+// honouring quoted parts so that identifiers containing dots survive.
+//
+// The naive LastIndex(".") split mis-parses `"my.dotted.table"`, which then
+// fails the catalogue lookup and silently drops the export onto the OFFSET
+// fallback — the non-deterministic pagination this export path exists to
+// avoid. Parsing the quotes properly keeps every identifier intact.
+func splitTableName(table string) (schema, name string) {
+	parts := splitQualifiedIdent(table)
+	switch len(parts) {
+	case 0:
+		return "public", ""
+	case 1:
+		return "public", parts[0]
+	default:
+		// More than two parts: treat the last as the name and everything
+		// before it as the schema (PostgreSQL allows only two, so this keeps
+		// the lookup to something rather than nothing).
+		return strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1]
+	}
+}
+
+// splitQualifiedIdent splits a qualified identifier into its parts on the dots
+// that separate them, leaving dots inside a quoted part alone and stripping the
+// quotes. `"my.dotted.table"` is one part; `public.users` is two.
+//
+// A quote only opens a quoted part at the start of a part. A quote anywhere
+// else cannot be part of an unquoted SQL identifier, so it is carried through
+// verbatim and re-doubled later by quoteIdent, which keeps an identifier that
+// genuinely contains a quote intact.
+func splitQualifiedIdent(s string) []string {
+	var (
+		parts []string
+		cur   strings.Builder
+		quote bool
+	)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"' && quote:
+			// A doubled quote inside a quoted part is a literal quote.
+			if i+1 < len(s) && s[i+1] == '"' {
+				cur.WriteByte('"')
+				i++
+				continue
+			}
+			quote = false
+		case c == '"' && cur.Len() == 0 && !quote:
+			// Quote at the start of a part opens a quoted identifier.
+			quote = true
+		case c == '.' && !quote:
+			parts = append(parts, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	return append(parts, cur.String())
+}
+
 // quoteIdent quotes a PostgreSQL identifier, doubling any embedded quotes so
 // that unusual column names cannot break out of the identifier.
 func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
+
+// quoteTable renders a possibly schema-qualified table name for use in SQL.
+//
+// Table and schema names arrive from the command line, from profiles and from
+// MCP tool arguments, and are interpolated into statements that lib/pq sends
+// over the simple query protocol when there are no parameters — which accepts
+// several statements separated by semicolons. An unquoted name is therefore an
+// injection point as well as a source of syntax errors on any name that needs
+// quoting (mixed case, spaces, dots, reserved words).
+//
+// Each dot-separated part is quoted separately, mirroring how PostgreSQL
+// resolves "schema.table". Dots inside a quoted part are preserved, so an
+// identifier such as "my.dotted.table" stays one part, and a name that is
+// already quoted round-trips unchanged because the quotes are stripped before
+// being re-applied.
+func quoteTable(table string) string {
+	parts := splitQualifiedIdent(strings.TrimSpace(table))
+	for i, p := range parts {
+		parts[i] = quoteIdent(p)
+	}
+	return strings.Join(parts, ".")
+}
+
+// QuoteTable is quoteTable for callers outside this package.
+func QuoteTable(table string) string { return quoteTable(table) }
 
 // putDate writes "YYYY-MM-DD" into b, which must hold at least 10 bytes.
 func putDate(b []byte, year, month, day int) {

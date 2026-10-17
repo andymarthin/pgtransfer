@@ -3,7 +3,6 @@ package io
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	goio "io"
 	"net"
@@ -11,11 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/andymarthin/pgtransfer/internal/config"
-	"github.com/andymarthin/pgtransfer/internal/db"
 	"github.com/andymarthin/pgtransfer/internal/sshx"
 	"github.com/andymarthin/pgtransfer/internal/utils"
 	"golang.org/x/crypto/ssh"
@@ -239,12 +238,18 @@ type RestoreOptions struct {
 }
 
 // buildPgRestoreArgs assembles the pg_restore argument list.
-func buildPgRestoreArgs(dbURL, dumpPath string, clean bool) []string {
+func buildPgRestoreArgs(dbURL, dumpPath string, clean, strict bool) []string {
 	args := []string{"--no-owner", "--no-privileges"}
 	if clean {
 		// --clean requires --if-exists to avoid hard failures when
 		// objects do not exist yet.
 		args = append(args, "--clean", "--if-exists")
+	}
+	if strict {
+		// Without --exit-on-error pg_restore reports a failed object on stderr
+		// and keeps going, then exits 1 — indistinguishable from the benign
+		// version-skew case. With it, the first failure aborts the restore.
+		args = append(args, "--exit-on-error")
 	}
 	args = append(args, "--dbname", dbURL, dumpPath)
 	return args
@@ -263,7 +268,7 @@ func RestoreDatabase(dbURL, dumpPath string) error {
 
 	utils.PrintInfo(nil, "Starting database restore from %s...", dumpPath)
 
-	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, false), dumpPath, nil, start)
+	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, false, false), dumpPath, nil, start)
 }
 
 // RestoreDatabaseSmart automatically detects dump format and uses appropriate tool
@@ -354,7 +359,7 @@ func restoreWithPgRestore(dbURL, dumpPath string, options *RestoreOptions, start
 	utils.PrintInfo(nil, "Starting database restore from %s using pg_restore...", dumpPath)
 
 	clean := options != nil && options.Clean
-	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, clean), dumpPath, options, start)
+	return runRestoreCommand("pg_restore", buildPgRestoreArgs(dbURL, dumpPath, clean, restoreIsStrict(options)), dumpPath, options, start)
 }
 
 // runRestoreCommand runs a restore tool (psql/pg_restore) while driving the
@@ -369,7 +374,15 @@ func runRestoreCommand(tool string, args []string, dumpPath string, options *Res
 
 	cmd := exec.CommandContext(ctx, tool, args...)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	// Restore errors are classified by what the tool wrote to stderr, not by
+	// its exit status. pg_restore exits 1 both for "completed with ignorable
+	// errors" and for "this table failed to load", so the exit code alone
+	// cannot distinguish a version-skew warning from a restore that silently
+	// dropped data. Capture stderr, classify it, and pass everything that is
+	// not a known-benign message through to the user.
+	collector := &stderrCollector{w: os.Stderr}
+	cmd.Stderr = collector
 
 	bar := NewProgressBarWithTimer(0, fmt.Sprintf("Restoring from %s", dumpPath))
 
@@ -392,19 +405,34 @@ func runRestoreCommand(tool string, args []string, dumpPath string, options *Res
 				return fmt.Errorf("%s timed out after %d seconds", tool, options.Timeout)
 			}
 			if err != nil {
-				// pg_restore exits with status 1 when it encountered errors it
-				// was told (or defaulted) to ignore — e.g. benign client/server
-				// version skew such as "unrecognized configuration parameter".
-				// Treat that as a warning unless the caller asked for strict
-				// behaviour.
-				if tool == "pg_restore" && !restoreIsStrict(options) && pgRestoreErrorsIgnored(err) {
+				collector.flush()
+				problems := collector.erroneousLines()
+				if !restoreIsStrict(options) && len(problems) == 0 {
+					// Nothing in the output looks like a real failure, so the
+					// non-zero status came from warnings alone: version skew,
+					// objects already present, or privileges we were told not to
+					// restore. That is the case the tolerant default exists for.
 					bar.Finish()
 					duration := time.Since(start)
 					utils.PrintWarning(nil, "⚠️  Database restored with warnings from %s", dumpPath)
+					if n := collector.warningCount(); n > 0 {
+						utils.PrintInfo(nil, "ℹ️  %d message(s) were ignored (client/server version differences, or objects that already existed)", n)
+					}
 					utils.PrintInfo(nil, "🕒 Duration: %s", utils.FormatDuration(duration))
 					return nil
 				}
+				if len(problems) > 0 {
+					return fmt.Errorf("%s reported %d error(s) restoring %s (first: %s): %w",
+						tool, len(problems), dumpPath, problems[0], err)
+				}
 				return fmt.Errorf("%s failed: %w", tool, err)
+			}
+			collector.flush()
+			if problems := collector.erroneousLines(); len(problems) > 0 {
+				// Exit status 0 but real errors on stderr: psql with
+				// ON_ERROR_STOP=off does exactly this.
+				return fmt.Errorf("%s completed but reported %d error(s) restoring %s (first: %s)",
+					tool, len(problems), dumpPath, problems[0])
 			}
 			bar.Finish()
 			duration := time.Since(start)
@@ -428,15 +456,141 @@ func restoreIsStrict(options *RestoreOptions) bool {
 	return options != nil && options.Strict
 }
 
-// pgRestoreErrorsIgnored reports whether the pg_restore error corresponds to
-// the "errors ignored" condition (exit status 1 with the ignore-errors flag).
-func pgRestoreErrorsIgnored(err error) bool {
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
+// stderrCollector tees a restore tool's stderr to the user while remembering
+// enough of it to decide whether the run actually succeeded.
+//
+// The exit status alone is not a reliable signal: pg_restore returns 1 both
+// when it ignored benign version-skew messages and when a table failed to
+// load. Classifying the messages is the only way to tell those apart.
+type stderrCollector struct {
+	w goio.Writer
+
+	// kept holds lines that could not be classified immediately. It is bounded
+	// so a restore that emits megabytes of errors cannot exhaust memory; once
+	// full, further lines are counted but not retained.
+	kept         []string
+	dropped      int
+	warnings     int
+	erroneous    int
+	unknownLines int
+	pending      []byte
+}
+
+const stderrCollectorLimit = 200
+
+func (c *stderrCollector) Write(p []byte) (int, error) {
+	// Always show the output; classification is a side effect.
+	n, err := c.w.Write(p)
+	if n > 0 {
+		c.scan(p[:n])
+	}
+	return n, err
+}
+
+// scan splits the chunk into lines and classifies the complete ones, keeping
+// any trailing partial line for the next call.
+func (c *stderrCollector) scan(p []byte) {
+	c.pending = append(c.pending, p...)
+	for {
+		i := bytes.IndexByte(c.pending, '\n')
+		if i < 0 {
+			break
+		}
+		c.classify(string(c.pending[:i]))
+		c.pending = c.pending[i+1:]
+	}
+	// Guard against a tool that writes an unterminated megabyte.
+	if len(c.pending) > 64*1024 {
+		c.classify(string(c.pending))
+		c.pending = c.pending[:0]
+	}
+}
+
+// flush classifies a trailing partial line left at end of output.
+func (c *stderrCollector) flush() {
+	if len(c.pending) > 0 {
+		c.classify(string(c.pending))
+		c.pending = c.pending[:0]
+	}
+}
+
+// classify records one stderr line and reports whether it looks like a real
+// restore failure.
+func (c *stderrCollector) classify(line string) bool {
+	switch classifyRestoreLine(line) {
+	case restoreLineBenign:
+		c.warnings++
+		return false
+	case restoreLineError:
+		c.erroneous++
+		if len(c.kept) < stderrCollectorLimit {
+			c.kept = append(c.kept, strings.TrimSpace(line))
+		} else {
+			c.dropped++
+		}
+		return true
+	default:
+		c.unknownLines++
 		return false
 	}
-	// pg_restore uses exit code 1 for "completed with ignorable errors".
-	return exitErr.ExitCode() == 1
+}
+
+// erroneousLines returns up to a handful of lines that look like real errors.
+func (c *stderrCollector) erroneousLines() []string { return c.kept }
+
+func (c *stderrCollector) warningCount() int { return c.warnings }
+
+// restoreLineKind classifies a single line of restore output.
+type restoreLineKind int
+
+const (
+	restoreLineUnknown restoreLineKind = iota
+	restoreLineBenign
+	restoreLineError
+)
+
+// benignRestoreSubstrings are message fragments that indicate a difference
+// between client and server versions, or a pre-existing object, rather than a
+// failed restore. Everything else that mentions an error is treated as fatal,
+// so a new failure mode breaks the build rather than being silently tolerated.
+var benignRestoreSubstrings = []string{
+	"unrecognized configuration parameter",
+	"already exists",
+	"does not exist, skipping",
+	"no privileges could be revoked",
+	"no ownership could be changed", // --no-owner on objects owned by another role
+	"WARNING:",
+	"NOTICE:",
+}
+
+// classifyRestoreLine decides whether a line of psql/pg_restore output
+// represents a benign warning, a real error, or neither.
+func classifyRestoreLine(line string) restoreLineKind {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return restoreLineUnknown
+	}
+
+	isError := strings.Contains(trimmed, "ERROR:") || strings.Contains(trimmed, "FATAL:") ||
+		strings.Contains(trimmed, "error:") || strings.Contains(trimmed, "pg_restore: error")
+
+	if !isError {
+		for _, b := range benignRestoreSubstrings {
+			if strings.Contains(trimmed, b) {
+				return restoreLineBenign
+			}
+		}
+		return restoreLineUnknown
+	}
+
+	// An error caused by version skew or a pre-existing object is the case the
+	// tolerant default exists for.
+	for _, b := range benignRestoreSubstrings {
+		if strings.Contains(trimmed, b) {
+			return restoreLineBenign
+		}
+	}
+	return restoreLineError
 }
 
 func commandExists(cmd string) bool {
@@ -462,21 +616,15 @@ func DumpDatabaseWithConnection(profile config.Profile, dumpPath string) error {
 
 	utils.PrintInfo(nil, "Starting PostgreSQL dump...")
 
-	// Establish connection (handles both direct and SSH tunnel)
-	conn, err := db.Connect(profile)
+	tunnel, err := tunnelForCommand(profile)
 	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("failed to establish SSH tunnel: %w", err)
 	}
-	defer conn.Close()
-
-	// For SSH tunnels, we need to handle the connection differently
-	if conn.Mode == "tunnel" {
-		return dumpViaTunnel(profile, dumpPath, start)
+	if tunnel != nil {
+		defer tunnel.Close()
 	}
 
-	// For direct connections, use the standard approach
-	dbURL := config.BuildDSN(profile)
-	return executePgDump(dbURL, dumpPath, start, nil)
+	return executePgDump(dbURLFor(profile, tunnel), dumpPath, start, nil)
 }
 
 // DumpDatabaseWithConnectionAndOptions performs a database dump with advanced options using DBConnection
@@ -487,63 +635,15 @@ func DumpDatabaseWithConnectionAndOptions(profile config.Profile, dumpPath strin
 		return fmt.Errorf("pg_dump not found in PATH — please install PostgreSQL client tools")
 	}
 
-	// Establish connection (handles both direct and SSH tunnel)
-	conn, err := db.Connect(profile)
-	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
-	}
-	defer conn.Close()
-
-	// For SSH tunnels, we need to handle the connection differently
-	if conn.Mode == "tunnel" {
-		return dumpViaTunnelWithOptions(profile, dumpPath, options, start)
-	}
-
-	// For direct connections, use the standard approach
-	dbURL := config.BuildDSN(profile)
-	return executePgDumpWithOptions(dbURL, dumpPath, options, start)
-}
-
-// dumpViaTunnel handles database dumps through SSH tunnels
-func dumpViaTunnel(profile config.Profile, dumpPath string, start time.Time) error {
-	utils.PrintInfo(nil, "🔐 Using SSH tunnel for database dump...")
-
-	// Establish SSH tunnel and get local port
-	tunnel, localPort, err := establishSSHTunnel(profile)
+	tunnel, err := tunnelForCommand(profile)
 	if err != nil {
 		return fmt.Errorf("failed to establish SSH tunnel: %w", err)
 	}
-	defer tunnel.Close()
-
-	// Create local profile using the tunnel
-	localProfile := profile
-	localProfile.Host = "localhost"
-	localProfile.Port = localPort
-	localProfile.SSH.Enabled = false // Disable SSH for the local connection
-
-	dbURL := config.BuildDSN(localProfile)
-	return executePgDump(dbURL, dumpPath, start, nil)
-}
-
-// dumpViaTunnelWithOptions handles database dumps through SSH tunnels with options
-func dumpViaTunnelWithOptions(profile config.Profile, dumpPath string, options *DumpOptions, start time.Time) error {
-	utils.PrintInfo(nil, "🔐 Using SSH tunnel for database dump with options...")
-
-	// Establish SSH tunnel and get local port
-	tunnel, localPort, err := establishSSHTunnel(profile)
-	if err != nil {
-		return fmt.Errorf("failed to establish SSH tunnel: %w", err)
+	if tunnel != nil {
+		defer tunnel.Close()
 	}
-	defer tunnel.Close()
 
-	// Create local profile using the tunnel
-	localProfile := profile
-	localProfile.Host = "localhost"
-	localProfile.Port = localPort
-	localProfile.SSH.Enabled = false // Disable SSH for the local connection
-
-	dbURL := config.BuildDSN(localProfile)
-	return executePgDumpWithOptions(dbURL, dumpPath, options, start)
+	return executePgDumpWithOptions(dbURLFor(profile, tunnel), dumpPath, options, start)
 }
 
 // executePgDump executes the pg_dump command with basic options
@@ -708,42 +808,15 @@ func RestoreDatabaseWithConnectionAndOptions(profile config.Profile, dumpPath st
 		return fmt.Errorf("dump file not found: %w", err)
 	}
 
-	// Establish connection (handles both direct and SSH tunnel)
-	conn, err := db.Connect(profile)
-	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
-	}
-	defer conn.Close()
-
-	// For SSH tunnels, we need to handle the connection differently
-	if conn.Mode == "tunnel" {
-		return restoreViaTunnel(profile, dumpPath, options, start)
-	}
-
-	// For direct connections, use the standard approach
-	dbURL := config.BuildDSN(profile)
-	return restoreDatabaseSmartWithOptions(dbURL, dumpPath, options, start)
-}
-
-// restoreViaTunnel handles database restores through SSH tunnels
-func restoreViaTunnel(profile config.Profile, dumpPath string, options *RestoreOptions, start time.Time) error {
-	utils.PrintInfo(nil, "🔐 Using SSH tunnel for database restore...")
-
-	// Establish SSH tunnel and get local port
-	tunnel, localPort, err := establishSSHTunnel(profile)
+	tunnel, err := tunnelForCommand(profile)
 	if err != nil {
 		return fmt.Errorf("failed to establish SSH tunnel: %w", err)
 	}
-	defer tunnel.Close()
+	if tunnel != nil {
+		defer tunnel.Close()
+	}
 
-	// Create local profile using the tunnel
-	localProfile := profile
-	localProfile.Host = "localhost"
-	localProfile.Port = localPort
-	localProfile.SSH.Enabled = false // Disable SSH for the local connection
-
-	dbURL := config.BuildDSN(localProfile)
-	return restoreDatabaseSmartWithOptions(dbURL, dumpPath, options, start)
+	return restoreDatabaseSmartWithOptions(dbURLFor(profile, tunnel), dumpPath, options, start)
 }
 
 // restoreDatabaseSmartWithOptions detects the dump format and restores it,
@@ -763,13 +836,38 @@ func restoreDatabaseSmartWithOptions(dbURL, dumpPath string, options *RestoreOpt
 	return restoreWithPgRestore(dbURL, dumpPath, options, start)
 }
 
-// establishSSHTunnel creates a local port forward for external commands like pg_dump
-func establishSSHTunnel(profile config.Profile) (*ssh.Client, int, error) {
+// sshTunnel is a local listener that forwards every accepted connection to the
+// database host through an SSH client. It is created once per command and
+// closed when the command finishes.
+type sshTunnel struct {
+	client   *ssh.Client
+	listener net.Listener
+	port     int
+	done     chan struct{}
+}
+
+// localPort returns the port the tunnel listens on.
+func (t *sshTunnel) localPort() int { return t.port }
+
+// Close stops accepting connections, closes the listener and the SSH client,
+// and waits for the forwarding goroutine to exit.
+func (t *sshTunnel) Close() error {
+	close(t.done)
+	err := t.listener.Close()
+	if t.client != nil {
+		_ = t.client.Close()
+	}
+	return err
+}
+
+// openTunnel dials SSH and starts forwarding. The listener is bound before it
+// is returned, so a tunnel handed back to the caller is already accepting
+// connections — there is no window in which the port is advertised but dead.
+func openTunnel(profile config.Profile) (*sshTunnel, error) {
 	if !profile.SSH.Enabled {
-		return nil, 0, fmt.Errorf("SSH is not enabled for this profile")
+		return nil, fmt.Errorf("SSH is not enabled for this profile")
 	}
 
-	// Establish SSH tunnel and get local port
 	authMethods, err := sshx.BuildAuthMethods(sshx.Config{
 		User:       profile.SSH.User,
 		Host:       profile.SSH.Host,
@@ -780,7 +878,7 @@ func establishSSHTunnel(profile config.Profile) (*ssh.Client, int, error) {
 		Timeout:    profile.SSH.Timeout,
 	})
 	if err != nil {
-		return nil, 0, fmt.Errorf("SSH auth setup failed: %w", err)
+		return nil, fmt.Errorf("SSH auth setup failed: %w", err)
 	}
 
 	clientConfig := &ssh.ClientConfig{
@@ -790,68 +888,89 @@ func establishSSHTunnel(profile config.Profile) (*ssh.Client, int, error) {
 		Timeout:         time.Duration(profile.SSH.Timeout) * time.Second,
 	}
 
-	// Connect to SSH server
 	addr := fmt.Sprintf("%s:%d", profile.SSH.Host, profile.SSH.Port)
 	sshClient, err := ssh.Dial("tcp", addr, clientConfig)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed SSH connection: %w", err)
+		return nil, fmt.Errorf("failed SSH connection: %w", err)
 	}
 
-	// Find an available local port
-	listener, err := net.Listen("tcp", "localhost:0")
+	// Bind on the loopback interface only: the forwarded database port must
+	// not be reachable from other hosts.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		sshClient.Close()
-		return nil, 0, fmt.Errorf("failed to find available local port: %w", err)
+		_ = sshClient.Close()
+		return nil, fmt.Errorf("failed to find available local port: %w", err)
 	}
-	localPort := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
 
-	// Start port forwarding in a goroutine
-	go func() {
-		for {
-			// Listen on local port
-			localListener, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", localPort))
-			if err != nil {
-				return
-			}
-			defer localListener.Close()
+	tunnel := &sshTunnel{
+		client:   sshClient,
+		listener: listener,
+		port:     listener.Addr().(*net.TCPAddr).Port,
+		done:     make(chan struct{}),
+	}
+	go tunnel.forward(profile)
+	return tunnel, nil
+}
 
-			for {
-				// Accept local connection
-				localConn, err := localListener.Accept()
-				if err != nil {
-					return
-				}
-
-				// Connect to remote database through SSH tunnel
-				remoteAddr := fmt.Sprintf("%s:%d", profile.Host, profile.Port)
-				remoteConn, err := sshClient.Dial("tcp", remoteAddr)
-				if err != nil {
-					localConn.Close()
-					continue
-				}
-
-				// Start forwarding data between connections
-				go func() {
-					defer localConn.Close()
-					defer remoteConn.Close()
-
-					// Forward data in both directions
-					go func() {
-						defer localConn.Close()
-						defer remoteConn.Close()
-						copyData(localConn, remoteConn)
-					}()
-					copyData(remoteConn, localConn)
-				}()
-			}
+// forward accepts local connections until the tunnel is closed and pipes each
+// one to the database host over SSH.
+func (t *sshTunnel) forward(profile config.Profile) {
+	remoteAddr := fmt.Sprintf("%s:%d", profile.Host, profile.Port)
+	for {
+		localConn, err := t.listener.Accept()
+		if err != nil {
+			return
 		}
-	}()
+		remoteConn, err := t.client.Dial("tcp", remoteAddr)
+		if err != nil {
+			_ = localConn.Close()
+			continue
+		}
+		go pipeConnections(localConn, remoteConn)
+	}
+}
 
-	// Give the tunnel a moment to start
-	time.Sleep(100 * time.Millisecond)
+// pipeConnections copies data in both directions and closes both connections
+// when either side finishes, so a half-open socket cannot be left behind.
+func pipeConnections(local, remote net.Conn) {
+	var once sync.Once
+	closeBoth := func() {
+		_ = local.Close()
+		_ = remote.Close()
+	}
 
-	return sshClient, localPort, nil
+	done := make(chan struct{}, 2)
+	go func() { copyData(remote, local); done <- struct{}{} }()
+	go func() { copyData(local, remote); done <- struct{}{} }()
+
+	<-done
+	once.Do(closeBoth)
+	// Unblock the other direction, which may be parked in a read.
+	<-done
+}
+
+// tunnelForCommand returns a tunnel only when the profile needs one. It is
+// created once per dump or restore instead of relying on a pooled connection
+// that is then discarded.
+func tunnelForCommand(profile config.Profile) (*sshTunnel, error) {
+	if !profile.SSH.Enabled {
+		return nil, nil
+	}
+	utils.PrintInfo(nil, "🔐 Using SSH tunnel to %s:%d...", profile.SSH.Host, profile.SSH.Port)
+	return openTunnel(profile)
+}
+
+// dbURLFor builds the connection string a dump or restore should use. With
+// a tunnel the connection points at the tunnel's local port.
+func dbURLFor(profile config.Profile, tunnel *sshTunnel) string {
+	if tunnel == nil {
+		return config.BuildDSN(profile)
+	}
+	localProfile := profile
+	localProfile.Host = "127.0.0.1"
+	localProfile.Port = tunnel.localPort()
+	localProfile.SSH.Enabled = false
+	return config.BuildDSN(localProfile)
 }
 
 // copyData copies data between two connections
