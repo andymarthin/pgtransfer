@@ -9,7 +9,7 @@ release workflow publishes the section matching a pushed tag as the GitHub relea
 body. Add a new section at the top for the version you are about to tag, replacing
 `unreleased` with the release date.
 
-## [1.4.0] - unreleased
+## [1.4.0] - 2026-10-23
 
 Import and migration both got a different path to the database, and the numbers
 moved by an order of magnitude.
