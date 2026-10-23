@@ -1,4 +1,15 @@
-# PGTransfer v1.4.0
+# Changelog
+
+All notable changes to PGTransfer are documented here, in the style of
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project follows
+[semantic versioning](https://semver.org/spec/v2.0.0.html).
+
+Each release has its own `## [x.y.z] - YYYY-MM-DD` section, newest first, and the
+release workflow publishes the section matching a pushed tag as the GitHub release
+body. Add a new section at the top for the version you are about to tag, replacing
+`unreleased` with the release date.
+
+## [1.4.0] - unreleased
 
 Import and migration both got a different path to the database, and the numbers
 moved by an order of magnitude.

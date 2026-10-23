@@ -129,18 +129,55 @@ jobs:
 
       - name: Generate release body
         run: |
-          # Prefer a hand-written RELEASE_NOTES.md when present; otherwise fall
-          # back to an auto-generated changelog.
-          if [ -f RELEASE_NOTES.md ]; then
-            # Strip any hand-written Downloads section: the workflow appends a
-            # canonical one below (generated from the version), so keeping both
-            # would duplicate the section in the published notes.
-            awk '
-              /^##[[:space:]]+[Dd]ownloads[[:space:]]*$/ { skip = 1; next }
-              skip && /^##[[:space:]]/ { skip = 0 }
-              !skip { print }
-            ' RELEASE_NOTES.md > release-body.md
+          # Prefer the CHANGELOG.md section for the tag being released; otherwise
+          # fall back to a body generated from git log.
+          #
+          # The section runs from the first "## " heading whose title names the
+          # version (e.g. "## v1.4.0" or "## [1.4.0] - 2026-01-01") up to the next
+          # "## " heading, so the file's preamble and the older releases in it are
+          # dropped.
+          if [ -f CHANGELOG.md ]; then
+            awk -v ver="${{ steps.version.outputs.VERSION }}" '
+              {
+                ishead = ($0 ~ /^##[[:space:]]/)
+
+                # A second "## " heading closes the section.
+                if (ishead && skip) skip = 0
+
+                # Section start: a "## " heading naming this version, with any
+                # leading "v" ignored on both sides, so "## v1.4.0",
+                # "## 1.4.0 (unreleased)" and "## [1.4.0] - 2026-01-01" all match.
+                if (ishead && !found) {
+                  title = $0
+                  sub(/^##[[:space:]]+\[?/, "", title)
+                  sub(/\].*$/, "", title)
+                  sub(/[^0-9A-Za-z.].*$/, "", title)
+                  sub(/^v/, "", title)
+                  want = ver
+                  sub(/^v/, "", want)
+                  if (title == want) { found = 1; skip = 1; next }
+                }
+
+                # Drop a hand-written Downloads section: the workflow appends a
+                # canonical one below (built from the version), so keeping both
+                # would duplicate the section in the published release.
+                if (ishead && $0 ~ /[Dd]ownloads/) { dl = 1; next }
+                if (ishead && dl) dl = 0
+
+                if (found && skip && !dl) print
+              }
+              END { if (!found) exit 3 }
+            ' CHANGELOG.md > release-body.md \
+              || { echo "CHANGELOG.md has no section for ${{ steps.version.outputs.VERSION }}; generating one from git log." >&2; rm -f release-body.md; }
           else
+            echo "No CHANGELOG.md; generating the release body from git log."
+          fi
+
+          # The CHANGELOG.md branch bails out (or there is no CHANGELOG.md at
+          # all); generate a body from git log so the release is never published
+          # without one.
+          if [ ! -s release-body.md ]; then
+            echo "::warning::No usable CHANGELOG.md section for the tag; generated the release body from git log."
             PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
             if [ -n "$PREV_TAG" ]; then
               echo "## What's Changed" > release-body.md
