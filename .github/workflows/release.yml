@@ -64,6 +64,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           mkdir -p build
           BINARY_NAME="pgtransfer"
@@ -72,28 +73,34 @@ jobs:
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           COMMIT_HASH=$(git rev-parse --short HEAD)
 
-          go build -ldflags="-s -w -X github.com/andymarthin/pgtransfer/cmd.Version=${{ steps.version.outputs.VERSION }} -X github.com/andymarthin/pgtransfer/cmd.Commit=${COMMIT_HASH} -X github.com/andymarthin/pgtransfer/cmd.Date=${BUILD_DATE}" \
+          go build -ldflags="-s -w -X github.com/andymarthin/pgtransfer/cmd.Version=${VERSION} -X github.com/andymarthin/pgtransfer/cmd.Commit=${COMMIT_HASH} -X github.com/andymarthin/pgtransfer/cmd.Date=${BUILD_DATE}" \
             -o build/${BINARY_NAME} .
 
       # Smoke-test the artifact: the binary must run and report the tag version.
       - name: Smoke test binary (version)
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           out="$(./build/pgtransfer version)"
           echo "$out"
-          echo "$out" | grep -q "${{ steps.version.outputs.VERSION }}" \
-            || { echo "binary did not report version ${{ steps.version.outputs.VERSION }}" >&2; exit 1; }
+          echo "$out" | grep -qF "$VERSION" \
+            || { echo "binary did not report version $VERSION" >&2; exit 1; }
 
       - name: Package archive
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           cd build
-          tar -czf pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.tar.gz pgtransfer
+          tar -czf "pgtransfer-${VERSION}-${{ matrix.suffix }}.tar.gz" pgtransfer
 
       - name: Checksums
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           cd build
-          shasum -a 256 pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.tar.gz \
-            > pgtransfer-${{ steps.version.outputs.VERSION }}-${{ matrix.suffix }}.tar.gz.sha256
+          shasum -a 256 "pgtransfer-${VERSION}-${{ matrix.suffix }}.tar.gz" \
+            > "pgtransfer-${VERSION}-${{ matrix.suffix }}.tar.gz.sha256"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -111,6 +118,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          # Full history and tags: the release body falls back to `git log` and
+          # `git describe --tags` since the previous tag, which a shallow clone
+          # cannot answer.
+          fetch-depth: 0
 
       - name: Get version from tag
         id: version
@@ -128,34 +140,44 @@ jobs:
           cat artifacts/SHA256SUMS
 
       - name: Generate release body
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           # Prefer the CHANGELOG.md section for the tag being released; otherwise
           # fall back to a body generated from git log.
           #
-          # The section runs from the first "## " heading whose title names the
-          # version (e.g. "## v1.4.0" or "## [1.4.0] - 2026-01-01") up to the next
-          # "## " heading, so the file's preamble and the older releases in it are
-          # dropped.
+          # The section starts at the first "## " heading whose title names the
+          # version (e.g. "## v1.4.0" or "## [1.4.0] - 2026-01-01") and ends at the
+          # next "## " heading that also names a version, so the file's preamble,
+          # the older releases in it, and any "## Features"-style headings
+          # *inside* an entry are all handled: only the older releases are
+          # dropped, and internal headings stay part of the section.
           if [ -f CHANGELOG.md ]; then
-            awk -v ver="${{ steps.version.outputs.VERSION }}" '
+            awk -v ver="$VERSION" '
+              # A heading names a version when its title is, or starts with, a
+              # number: "1.4.0", "[1.4.0] - date", "v1.4.0 (unreleased)".
+              function title_version(line,   t) {
+                t = line
+                sub(/^##[[:space:]]+/, "", t)
+                sub(/^\[/, "", t)
+                if (t !~ /^v?[0-9]/) return ""
+                sub(/\].*$/, "", t)
+                sub(/[^0-9A-Za-z.].*$/, "", t)
+                sub(/^v/, "", t)
+                return t
+              }
               {
                 ishead = ($0 ~ /^##[[:space:]]/)
+                hver = ishead ? title_version($0) : ""
 
-                # A second "## " heading closes the section.
-                if (ishead && skip) skip = 0
+                # A later version heading closes the section; an internal heading
+                # (no version in it) does not.
+                if (ishead && skip && hver != "") skip = 0
 
-                # Section start: a "## " heading naming this version, with any
-                # leading "v" ignored on both sides, so "## v1.4.0",
-                # "## 1.4.0 (unreleased)" and "## [1.4.0] - 2026-01-01" all match.
-                if (ishead && !found) {
-                  title = $0
-                  sub(/^##[[:space:]]+\[?/, "", title)
-                  sub(/\].*$/, "", title)
-                  sub(/[^0-9A-Za-z.].*$/, "", title)
-                  sub(/^v/, "", title)
+                if (ishead && !found && hver != "") {
                   want = ver
                   sub(/^v/, "", want)
-                  if (title == want) { found = 1; skip = 1; next }
+                  if (hver == want) { found = 1; skip = 1; next }
                 }
 
                 # Drop a hand-written Downloads section: the workflow appends a
@@ -168,7 +190,7 @@ jobs:
               }
               END { if (!found) exit 3 }
             ' CHANGELOG.md > release-body.md \
-              || { echo "CHANGELOG.md has no section for ${{ steps.version.outputs.VERSION }}; generating one from git log." >&2; rm -f release-body.md; }
+              || { echo "CHANGELOG.md has no section for ${VERSION}; generating one from git log." >&2; rm -f release-body.md; }
           else
             echo "No CHANGELOG.md; generating the release body from git log."
           fi
@@ -198,10 +220,10 @@ jobs:
           echo "" >> release-body.md
           echo "Choose the appropriate binary for your platform:" >> release-body.md
           echo "" >> release-body.md
-          echo "- **Linux (x64)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz\`" >> release-body.md
-          echo "- **Linux (ARM64)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz\`" >> release-body.md
-          echo "- **macOS (Intel)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz\`" >> release-body.md
-          echo "- **macOS (Apple Silicon)**: \`pgtransfer-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz\`" >> release-body.md
+          echo "- **Linux (x64)**: \`pgtransfer-${VERSION}-linux-amd64.tar.gz\`" >> release-body.md
+          echo "- **Linux (ARM64)**: \`pgtransfer-${VERSION}-linux-arm64.tar.gz\`" >> release-body.md
+          echo "- **macOS (Intel)**: \`pgtransfer-${VERSION}-darwin-amd64.tar.gz\`" >> release-body.md
+          echo "- **macOS (Apple Silicon)**: \`pgtransfer-${VERSION}-darwin-arm64.tar.gz\`" >> release-body.md
           echo "- **Installer**: \`install.sh\`" >> release-body.md
           echo "- **Checksums**: \`SHA256SUMS\`" >> release-body.md
           echo "" >> release-body.md
@@ -213,6 +235,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
+          # Action inputs are not shell text, so the expression is safe here.
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: Release ${{ steps.version.outputs.VERSION }}
           body_path: release-body.md

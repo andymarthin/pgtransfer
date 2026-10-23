@@ -16,12 +16,16 @@ Releases are cut automatically by GitHub Actions when a version tag is pushed.
    workflow publishes the matching section as the release body, so it must describe
    the release you are tagging, not the previous one. The heading is matched
    against the tag with any leading `v` ignored — `## v1.4.0`, `## [1.4.0] - date`
-   and `## 1.4.0` all work — and the section ends at the next `## ` heading. Add
-   the real date when you tag, and replace `unreleased` with it. Omit a Downloads
-   section — the workflow appends one generated from the tag.
+   and `## 1.4.0` all work. Add the real date when you tag, and replace
+   `unreleased` with it. Omit a Downloads section — the workflow appends one
+   generated from the tag.
+
+   The section ends at the next `## ` heading that itself names a version, so
+   `## ✨ New features`-style headings inside an entry stay part of the release,
+   and only the older releases below it are left out.
 
    If no section matches the tag, the workflow warns and falls back to a body
-   generated from `git log`.
+   generated from `git log` since the previous tag.
 
 3. **Pick the version.** The project follows semantic versioning:
 
